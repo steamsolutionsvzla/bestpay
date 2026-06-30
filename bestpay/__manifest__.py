@@ -10,7 +10,7 @@
         'payment',
     ],
     'data': [
-        'security/ir.model.access.csv',
+        # 'security/ir.model.access.csv',
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
         'views/bestpay_menus.xml',
