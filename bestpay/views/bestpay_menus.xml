@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_bestpay_root"
+              name="BestPay"
+              sequence="10"
+              web_icon="bestpay,static/description/icon.svg"/> 
+
+    <record id="action_bestpay_transactions" model="ir.actions.act_window">
+        <name>Transacciones API</name>
+        <res_model>payment.transaction</res_model>
+        <view_mode>list,form,kanban</view_mode>
+        <help type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No hay transacciones registradas aún.
+            </p>
+            <p>
+                Aquí aparecerán los intentos de cobro que tus clientes 3ro envíen a través de la API.
+            </p>
+        </help>
+    </record>
+
+    <record id="action_bestpay_providers" model="ir.actions.act_window">
+        <name>Bancos y Pasarelas</name>
+        <res_model>payment.provider</res_model>
+        <view_mode>list,form,kanban</view_mode>
+        <help type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Configura tu primer banco o pasarela.
+            </p>
+        </help>
+    </record>
+
+    <record id="action_bestpay_clients" model="ir.actions.act_window">
+        <name>Clientes API</name>
+        <res_model>res.partner</res_model>
+        <view_mode>list,form,kanban</view_mode>
+        <domain>[('is_api_client', '=', True)]</domain>
+        <context>{'default_is_api_client': True}</context>
+        <help type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Registra a tu primer cliente API.
+            </p>
+        </help>
+    </record>
+
+    <menuitem id="menu_bestpay_operations"
+              name="Operaciones"
+              parent="menu_bestpay_root"
+              sequence="10"/>
+
+    <menuitem id="menu_bestpay_sub_transactions"
+              name="Transacciones"
+              parent="menu_bestpay_operations"
+              action="action_bestpay_transactions"
+              sequence="10"/>
+
+    <menuitem id="menu_bestpay_configuration"
+              name="Configuración"
+              parent="menu_bestpay_root"
+              sequence="20"/>
+
+    <menuitem id="menu_bestpay_sub_clients"
+              name="Clientes API (Terceros)"
+              parent="menu_bestpay_configuration"
+              action="action_bestpay_clients"
+              sequence="10"/>
+
+    <menuitem id="menu_bestpay_sub_providers"
+              name="Bancos / Pasarelas"
+              parent="menu_bestpay_configuration"
+              action="action_bestpay_providers"
+              sequence="20"/>
+</odoo>
