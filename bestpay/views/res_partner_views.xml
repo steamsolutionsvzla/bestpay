@@ -1,23 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <record id="view_partner_form_bestpay" model="ir.ui.view">
-        <name>res.partner.form.bestpay.inherit</name>
-        <model>res.partner</model>
-        <inherit_id ref="base.view_partner_form"/>
-        <arch type="xml">
-            <xpath expr="//notebook" position="inside">
-                <page string="BestPay API" name="bestpay_api">
-                    <group>
-                        <group string="Configuración de Acceso">
-                            <field name="is_api_client"/>
-                            <field name="bestpay_token" invisible="not is_api_client" password="True"/>
+    <data>
+        <record id="view_partner_form_bestpay" model="ir.ui.view">
+            <name>res.partner.form.bestpay.inherit</name>
+            <model>res.partner</model>
+            <inherit_id ref="base.view_partner_form"/>
+            <arch type="xml">
+                <xpath expr="//notebook" position="inside">
+                    <page string="BestPay API" name="bestpay_api">
+                        <group>
+                            <group string="Configuración de Acceso">
+                                <field name="is_api_client"/>
+                                <field name="bestpay_token" invisible="not is_api_client" password="True"/>
+                            </group>
+                            <group string="Permisos de Pasarelas" invisible="not is_api_client">
+                                <field name="allowed_provider_ids" widget="many2many_tags" options="{'no_create': True}"/>
+                            </group>
                         </group>
-                        <group string="Permisos de Pasarelas" invisible="not is_api_client">
-                            <field name="allowed_provider_ids" widget="many2many_tags" options="{'no_create': True}"/>
-                        </group>
-                    </group>
-                </page>
-            </xpath>
-        </arch>
-    </record>
+                    </page>
+                </xpath>
+            </arch>
+        </record>
+    </data>
 </odoo>
