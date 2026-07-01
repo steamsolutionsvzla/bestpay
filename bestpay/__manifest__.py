@@ -11,11 +11,11 @@
         'payment',
     ],
     'data': [
+        'data/cron_bcv.xml',
+        'data/bestpay_menus.xml',
         # 'security/ir.model.access.csv',
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
-        'views/bestpay_menus.xml',
-        'data/cron_bcv.xml',
     ],
 
     'installable': True,
