@@ -6,7 +6,7 @@
     'description': 'Verificador de pagos y enlaces de pago para Steam Solutions',
     'author': 'Samuel',
     'depends': ['base'],
-    'data': [],
+    'data': ['data/cron_bcv.xml',],
     'installable': True,
     'application': True,
     'auto_install': False,
