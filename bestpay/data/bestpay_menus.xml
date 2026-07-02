@@ -44,6 +44,22 @@
             </field>
         </record>
 
+        <record id="action_bestpay_currencies" model="ir.actions.act_window">
+            <field name="name">Monedas</field>
+            <field name="res_model">res.currency</field>
+            <field name="view_mode">list,form</field>  <!-- Cambiado de tree a list -->
+            <field name="domain">[]</field>
+            <field name="context">{'active_test': False}</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Configura las monedas disponibles para pagos.
+                </p>
+                <p>
+                    Activa las monedas que tus clientes podrán usar para realizar pagos.
+                </p>
+            </field>
+        </record>
+
         <menuitem id="menu_bestpay_operations"
                 name="Operaciones"
                 parent="menu_bestpay_root"
@@ -71,5 +87,11 @@
                 parent="menu_bestpay_configuration"
                 action="action_bestpay_providers"
                 sequence="20"/>
+        
+        <menuitem id="menu_bestpay_sub_currencies"
+                name="Monedas"
+                parent="menu_bestpay_configuration"
+                action="action_bestpay_currencies"
+                sequence="30"/>
     </data>
 </odoo>

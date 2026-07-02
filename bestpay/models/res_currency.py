@@ -3,6 +3,7 @@ from odoo import models, fields, api
 import requests
 from bs4 import BeautifulSoup
 import logging
+from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
@@ -24,21 +25,13 @@ class ResCurrency(models.Model):
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # DIAGNÓSTICO: Ver qué hay en la página
-                all_divs = soup.find_all('div')
-                _logger.info(f'[BCV SYNC] Total de divs encontrados: {len(all_divs)}')
-                
-                # Mostrar los primeros 20 IDs de divs
-                divs_with_id = [div.get('id') for div in all_divs if div.get('id')]
-                _logger.info(f'[BCV SYNC] IDs de divs: {divs_with_id[:20]}')
-                
-                # Buscar el dólar
                 section_dolar = soup.find('div', id='dolar')
                 section_euro = soup.find('div', id='euro')
                 
-                _logger.info(f'[BCV SYNC] Contenedor dólar encontrado: {section_dolar is not None}')
-                _logger.info(f'[BCV SYNC] Contenedor euro encontrado: {section_euro is not None}')
+                _logger.info(f'[BCV SYNC] Contenedor dólar: {section_dolar is not None}')
+                _logger.info(f'[BCV SYNC] Contenedor euro: {section_euro is not None}')
                 
+                # Procesar DÓLAR
                 if section_dolar:
                     try:
                         texto_dolar = section_dolar.find('strong').text.strip()
@@ -46,37 +39,60 @@ class ResCurrency(models.Model):
                         
                         currency_ves = self.env['res.currency'].search([('name', '=', 'VES')], limit=1)
                         if currency_ves:
-                            self.env['res.currency.rate'].create({
-                                'currency_id': currency_ves.id,
-                                'name': fields.Datetime.now(),
-                                'rate': tasa_dolar,
-                            })
-                            _logger.info(f"[BCV SYNC] ✓✓ Dólar actualizado: {tasa_dolar} Bs/USD")
+                            today = fields.Date.today()
+                            # Buscar si ya existe una tasa para hoy
+                            rate_ves = self.env['res.currency.rate'].search([
+                                ('currency_id', '=', currency_ves.id),
+                                ('name', '=', today)
+                            ], limit=1)
+                            
+                            if rate_ves:
+                                # Actualizar la tasa existente
+                                rate_ves.write({'rate': tasa_dolar})
+                                _logger.info(f"[BCV SYNC] ✓ Dólar ACTUALIZADO: {tasa_dolar} Bs/USD")
+                            else:
+                                # Crear nueva tasa
+                                self.env['res.currency.rate'].create({
+                                    'currency_id': currency_ves.id,
+                                    'name': today,
+                                    'rate': tasa_dolar,
+                                })
+                                _logger.info(f"[BCV SYNC] ✓ Dólar CREADO: {tasa_dolar} Bs/USD")
                     except Exception as e:
                         _logger.error(f"[BCV SYNC] Error procesando dólar: {str(e)}")
-                else:
-                    _logger.warning("[BCV SYNC] ✗ Contenedor dólar NO encontrado")
+                        self.env.cr.rollback()  # Importante: rollback si hay error
                 
+                # Procesar EURO (en una transacción separada)
                 if section_euro:
                     try:
                         texto_euro = section_euro.find('strong').text.strip()
                         tasa_euro = float(texto_euro.replace(',', '.'))
                         
-                        if tasa_dolar and tasa_euro > 0:
-                            currency_eur = self.env['res.currency'].search([('name', '=', 'EUR')], limit=1)
-                            if currency_eur:
-                                tasa_final_eur = tasa_dolar / tasa_euro
+                        currency_eur = self.env['res.currency'].search([('name', '=', 'EUR')], limit=1)
+                        if currency_eur and tasa_euro > 0:
+                            today = fields.Date.today()
+                            # Buscar si ya existe una tasa para hoy
+                            rate_eur = self.env['res.currency.rate'].search([
+                                ('currency_id', '=', currency_eur.id),
+                                ('name', '=', today)
+                            ], limit=1)
+                            
+                            if rate_eur:
+                                # Actualizar la tasa existente
+                                rate_eur.write({'rate': tasa_euro})
+                                _logger.info(f"[BCV SYNC] ✓ Euro ACTUALIZADO: {tasa_euro} Bs/EUR")
+                            else:
+                                # Crear nueva tasa
                                 self.env['res.currency.rate'].create({
                                     'currency_id': currency_eur.id,
-                                    'name': fields.Datetime.now(),
-                                    'rate': tasa_final_eur,
+                                    'name': today,
+                                    'rate': tasa_euro,
                                 })
-                                _logger.info(f"[BCV SYNC] ✓✓ Euro actualizado: {tasa_final_eur} EUR/USD")
+                                _logger.info(f"[BCV SYNC] ✓ Euro CREADO: {tasa_euro} Bs/EUR")
                     except Exception as e:
                         _logger.error(f"[BCV SYNC] Error procesando euro: {str(e)}")
-                else:
-                    _logger.warning("[BCV SYNC] ✗ Contenedor euro NO encontrado")
-                    
+                        self.env.cr.rollback()
+                        
         except Exception as e:
             _logger.error(f"[BCV SYNC] Excepción crítica: {str(e)}", exc_info=True)
         
