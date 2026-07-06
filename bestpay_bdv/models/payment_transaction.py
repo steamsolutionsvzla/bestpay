@@ -11,6 +11,20 @@ _logger = logging.getLogger(__name__)
 class PaymentTransactionBDV(models.Model):
     _inherit = 'payment.transaction'
 
+    access_token = fields.Char(
+        string="Token de Acceso",
+        help="Token único y seguro para validar el link de pago. Evita que alguien adivine el ID de la transacción.",
+        copy=False,
+        readonly=True,
+    )
+
+    payment_link = fields.Char(
+        string="Link de Pago",
+        help="URL completa del formulario de pago que se envía al cliente final.",
+        copy=False,
+        readonly=True,
+    )
+
     # =====================================================
     # CAMPOS ESPECÍFICOS DEL FLUJO BDV (Pago Móvil)
     # =====================================================
@@ -78,12 +92,16 @@ class PaymentTransactionBDV(models.Model):
             raise UserError("Falta configurar la API Key del BDV en el proveedor de pago.")
 
         # 2. Construir el payload que pide el BDV
+        # Usar fecha de prueba si está configurada, sino usar fecha actual
+        test_date = creds.get('test_date')
+        fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
+        
         payload = {
             "cedulaPagador": self.bdv_cedula_pagador or '',
             "telefonoPagador": self.bdv_telefono_pagador or '',
             "telefonoDestino": creds['telefono_destino'],
             "referencia": self.bdv_referencia or '',
-            "fechaPago": str(self.bdv_fecha_pago or fields.Date.today()),
+            "fechaPago": fecha_pago,  # ← CAMBIAR ESTA LÍNEA
             "importe": f"{self.bdv_importe:.2f}",
             "bancoOrigen": self.bdv_banco_origen or '',
             "reqCed": self.bdv_req_ced,

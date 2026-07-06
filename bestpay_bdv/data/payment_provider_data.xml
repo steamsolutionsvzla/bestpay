@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+        <!-- Método de pago BDV -->
+        <record id="payment_method_bdv_pagomovil" model="payment.method">
+            <field name="name">Pago Móvil BDV</field>
+            <field name="code">bdv_pagomovil</field>
+            <field name="active" eval="True"/>
+            <field name="sequence">10</field>
+        </record>
+
+        <!-- Proveedor BDV -->
+        <record id="payment_provider_bdv" model="payment.provider">
+            <field name="name">Banco de Venezuela</field>
+            <field name="code">bdv</field>
+            <field name="state">enabled</field>
+            <field name="bdv_api_url">https://bdvconciliacionqa.banvenez.com:444/getMovement/v2</field>
+            <field name="bdv_telefono_destino">04127141363</field>
+            <field name="bdv_environment">qa</field>
+            <field name="payment_method_ids" eval="[(4, ref('payment_method_bdv_pagomovil'))]"/>
+        </record>
+
+                <!-- Secuencia para referencias únicas -->
+        <record id="seq_bestpay_transaction" model="ir.sequence">
+            <field name="name">BestPay Transaction Sequence</field>
+            <field name="code">bestpay.transaction.seq</field>
+            <field name="prefix"></field>
+            <field name="padding">6</field>
+            <field name="number_next">1</field>
+            <field name="number_increment">1</field>
+        </record>
+    </data>
+</odoo>

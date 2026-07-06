@@ -2,17 +2,14 @@
 <odoo>
     <data>
         <!-- ===================================================== -->
-        <!-- HEREDAR LA VISTA DE PAYMENT.PROVIDER PARA MOSTRAR     -->
-        <!-- LOS CAMPOS ESPECÍFICOS DEL BDV                         -->
+        <!-- VISTA 1: CONFIGURACIÓN DEL PROVEEDOR BDV              -->
         <!-- ===================================================== -->
         <record id="payment_provider_form_view_bdv" model="ir.ui.view">
             <field name="name">payment.provider.form.bdv</field>
             <field name="model">payment.provider</field>
             <field name="inherit_id" ref="payment.payment_provider_form"/>
             <field name="arch" type="xml">
-                <!-- Agregamos los campos BDV dentro del formulario existente -->
                 <xpath expr="//sheet" position="inside">
-                    <!-- Solo visible cuando el código sea 'bdv' -->
                     <group string="Configuración Banco de Venezuela" 
                            invisible="code != 'bdv'">
                         <group>
@@ -26,8 +23,23 @@
                             <field name="bdv_telefono_destino" 
                                    placeholder="04127141363"/>
                             <field name="bdv_environment"/>
+                            <field name="bdv_test_date"/>
                         </group>
                     </group>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- ===================================================== -->
+        <!-- VISTA 2: AGREGAR LINK DE PAGO EN TRANSACCIONES        -->
+        <!-- ===================================================== -->
+        <record id="payment_transaction_form_view_bdv_link" model="ir.ui.view">
+            <field name="name">payment.transaction.form.bdv.link</field>
+            <field name="model">payment.transaction</field>
+            <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='external_reference']" position="after">
+                    <field name="payment_link" widget="url" readonly="1" string="Link de Pago"/>
                 </xpath>
             </field>
         </record>

@@ -46,6 +46,12 @@ class PaymentProviderBDV(models.Model):
         help="Define si se usa el ambiente de pruebas o producción del BDV.",
     )
 
+    bdv_test_date = fields.Char(
+        string="Fecha de Prueba QA",
+        help="Fecha fija para pruebas en ambiente QA (formato: YYYY-MM-DD). Dejar vacío para usar fecha actual.",
+        default="2023-02-12",
+    )
+
     # =====================================================
     # MÉTODOS AUXILIARES
     # =====================================================
@@ -57,4 +63,5 @@ class PaymentProviderBDV(models.Model):
             'api_url': self.bdv_api_url or '',
             'telefono_destino': self.bdv_telefono_destino or '',
             'environment': self.bdv_environment or 'qa',
+            'test_date': self.bdv_test_date or '',  # ← AGREGAR ESTA LÍNEA
         }
