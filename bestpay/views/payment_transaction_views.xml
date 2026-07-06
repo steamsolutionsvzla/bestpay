@@ -5,10 +5,6 @@
         <field name="model">payment.transaction</field>
         <field name="inherit_id" ref="payment.payment_transaction_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//field[@name='currency_id']" position="attributes">
-                <attribute name="invisible">0</attribute>
-            </xpath>
-            
             <xpath expr="//sheet" position="inside">
                 <notebook>
                     <page string="Información BestPay API" name="bestpay_info">
