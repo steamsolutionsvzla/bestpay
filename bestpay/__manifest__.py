@@ -4,7 +4,7 @@
     'category': 'Accounting',
     'summary': 'Módulo de integración de pagos BestPay',
     'description': 'Verificador de pagos y enlaces de pago para Steam Solutions',
-    'author': 'Samuel',
+    'author': 'Steam Solution',
 
     'depends': [
         'base',
@@ -16,6 +16,7 @@
         # 'security/ir.model.access.csv',
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
+        'views/payment_provider_views.xml',
     ],
 
     'installable': True,

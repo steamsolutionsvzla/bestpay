@@ -16,8 +16,11 @@ class BestPayApiController(http.Controller):
         if not auth_header:
             return {'estado': 'error', 'mensaje': 'Falta cabecera Authorization.'}
         
-        token = auth_header.split(' ')[1] if auth_header.lower().startswith('bearer ') else auth_header
-        token = token.strip()
+        parts = auth_header.split(' ')
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            token = parts[1].strip()
+        else:
+            token = auth_header.strip()
         
         # Al usar auth='none', necesitamos forzar el uso de una base de datos si hay varias en el sistema
         # Odoo 19 requiere que request.env esté asociado a un registro válido.
@@ -48,7 +51,7 @@ class BestPayApiController(http.Controller):
             }
 
         # 4. Validar Proveedor de pagos y permisos
-        provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code)], limit=1)
+        provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
         if not provider:
             return {'estado': 'error', 'mensaje': f'El proveedor "{provider_code}" no existe.'}
         
@@ -65,7 +68,12 @@ class BestPayApiController(http.Controller):
         tx_dummy = request.env['payment.transaction'].sudo().new()
         tasa_bcv = tx_dummy._get_bcv_rate_or_fetch()
 
-        monto_recibido = float(amount)
+        try:
+            monto_recibido = float(amount)
+            if monto_recibido <= 0:
+                return {'estado': 'error', 'mensaje': 'El monto debe ser un valor mayor a cero.'}
+        except (ValueError, TypeError):
+            return {'estado': 'error', 'mensaje': 'El formato del campo "amount" es inválido.'}
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
         recalcular = False

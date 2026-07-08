@@ -4,6 +4,15 @@ from odoo import models, fields
     
 _logger = logging.getLogger(__name__)
 
+class PaymentProvider(models.Model):
+    _inherit = 'payment.provider'
+
+    is_bestpay_provider = fields.Boolean(
+        string="Es Proveedor BestPay", 
+        default=False,
+        help="Marque esta casilla si este proveedor/banco es utilizado por la API de BestPay."
+    )
+
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
@@ -21,7 +30,8 @@ class ResPartner(models.Model):
         'res_partner_payment_provider_rel',
         'partner_id',
         'provider_id',
-        string="Bancos/Pasarelas Permitidas"
+        string="Bancos/Pasarelas Permitidas",
+        domain="[('is_bestpay_provider', '=', True)]"
     )
 
 class PaymentTransaction(models.Model):
