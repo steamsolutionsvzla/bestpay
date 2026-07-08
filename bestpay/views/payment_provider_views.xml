@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <record id="payment_provider_form_bestpay" model="ir.ui.view">
-        <name>payment.provider.form.bestpay</name>
-        <model>payment.provider</model>
-        <inherit_id ref="payment.payment_provider_form"/>
-        <arch type="xml">
+        <field name="name">payment.provider.form.bestpay</field>
+        <field name="model">payment.provider</field>
+        <field name="inherit_id" ref="payment.payment_provider_form"/>
+        <field name="arch" type="xml">
             <!-- Lo ubicamos convenientemente en el grupo principal del formulario -->
             <xpath expr="//field[@name='code']" position="after">
                 <field name="is_bestpay_provider"/>
             </xpath>
-        </arch>
+        </field>
     </record>
 </odoo>
