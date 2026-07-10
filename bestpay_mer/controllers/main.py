@@ -28,6 +28,17 @@ class BestPayWebhookController(http.Controller):
 
         if not tx.exists():
             return request.not_found()
+        
+        if tx.provider_id.code != 'mer':
+            _logger.warning(
+                "[BESTPAY MERCANTIL API] Intento de redirección inválido. "
+                "La Tx %s pertenece al proveedor '%s', no a 'mercantil'.", 
+                tx.reference, tx.provider_id.code
+            )
+            return request.make_response(
+                "Error: Esta transacción no puede ser procesada a través de Mercantil.", 
+                status=400
+            )
 
         # 2. Evitar doble pago
         if tx.state == 'done':
