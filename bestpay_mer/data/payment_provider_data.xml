@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+        <record id="payment_method_mercantil_boton" model="payment.method">
+            <field name="name">Botón de Pago Mercantil</field>
+            <field name="code">mer_boton</field>
+            <field name="active" eval="True"/>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="payment_provider_mercantil" model="payment.provider">
+            <field name="name">Mercantil Botón de Pago (BestPay)</field>
+            <field name="code">mer</field>
+            <field name="state">test</field>
+            <field name="is_bestpay_provider" eval="True"/>
+            <field name="is_published" eval="True"/>
+            <field name="payment_method_ids" eval="[(4, ref('payment_method_mercantil_boton'))]"/>
+        </record>
+    </data>
+</odoo>

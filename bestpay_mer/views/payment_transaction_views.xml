@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_payment_transaction_form_inherit_mercantil" model="ir.ui.view">
+        <field name="name">payment.transaction.form.inherit.mercantil</field>
+        <field name="model">payment.transaction</field>
+        <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='bestpay_flow_type']" position="after">
+                <field name="trx_type" invisible="provider_code != 'mer'"/>
+                <field name="mercantil_payment_concepts" readonly="1" invisible="provider_code != 'mer'"/>
+                <field name="return_url_3ro" readonly="1" invisible="provider_code != 'mer'"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

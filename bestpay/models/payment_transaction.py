@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
-from odoo import models, fields
+import secrets
+from odoo import models, fields, api
     
 _logger = logging.getLogger(__name__)
 
@@ -61,6 +62,28 @@ class PaymentTransaction(models.Model):
         default=lambda self: self.env['res.currency'].search([('name', '=', 'VES')], limit=1)
     )
 
+    uuid_hash = fields.Char(
+        string="Hash Único de Transacción",
+        copy=False,
+        readonly=True,
+        index=True,
+        help="Hash seguro y único utilizado para exponer la transacción en las URLs de redirección sin revelar el ID."
+    )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """
+        Sobrescribimos el create para generar un hash seguro antes de guardar en la BD.
+        Odoo 19 utiliza obligatoriamente create_multi (recibe una lista de diccionarios).
+        """
+        for vals in vals_list:
+            # secrets.token_urlsafe(32) genera una cadena aleatoria y segura de ~43 caracteres,
+            # perfecta para URLs (usa caracteres A-Z, a-z, 0-9, -, y _).
+            if not vals.get('uuid_hash'):
+                vals['uuid_hash'] = secrets.token_urlsafe(32)
+                
+        return super(PaymentTransaction, self).create(vals_list)
+
     def _get_bcv_rate_or_fetch(self):
         """
         Busca la tasa de hoy. Si no existe, ejecuta el scraping 
@@ -93,6 +116,73 @@ class PaymentTransaction(models.Model):
             ], order='name desc', limit=1)
             
         return rate_row.rate if rate_row else 1.0
+    
+    def _bestpay_action_recalculate_jit_ves(self):
+        """
+        [MÓDULO PRINCIPAL]
+        Recálculo JIT corregido: Multiplica el monto original por la tasa directa 
+        de la divisa correspondiente a la transacción.
+        """
+        self.ensure_one()
+        if not self.is_recalculable_ves:
+            return
+
+        _logger.info("[BESTPAY CORE] Ejecutando recálculo JIT adaptado a divisa origen para Tx: %s", self.reference)
+        
+        today = fields.Date.today()
+        currency_ves = self.env['res.currency'].search([('name', '=', 'VES')], limit=1)
+        
+        # 1. Validar/Actualizar la tasa en BD local
+        latest_rate_ves = self.env['res.currency.rate'].search([
+            ('currency_id', '=', currency_ves.id), ('name', '=', today), ('company_id', '=', self.env.company.id)
+        ], limit=1)
+
+        if not latest_rate_ves:
+            self.env['res.currency']._update_bcv_rate()
+            latest_rate_ves = self.env['res.currency.rate'].search([
+                ('currency_id', '=', currency_ves.id), ('name', '=', today), ('company_id', '=', self.env.company.id)
+            ], limit=1)
+
+        if not latest_rate_ves:
+            latest_rate_ves = self.env['res.currency.rate'].search([('currency_id', '=', currency_ves.id)], order='name desc', limit=1)
+
+        tasa_bcv_ves = latest_rate_ves.rate if latest_rate_ves else 0.0
+
+        if tasa_bcv_ves <= 0:
+            return
+
+        monto_original = self.amount
+        nuevo_monto_ves = 0.0
+        tasa_final_guardar = tasa_bcv_ves
+
+        # CASO USD
+        if self.currency_id.name == 'USD':
+            nuevo_monto_ves = round(monto_original * tasa_bcv_ves, 2)
+            tasa_final_guardar = tasa_bcv_ves
+
+        # CASO EUR
+        elif self.currency_id.name == 'EUR':
+            currency_eur = self.env['res.currency'].search([('name', '=', 'EUR')], limit=1)
+            latest_rate_eur = self.env['res.currency.rate'].search([
+                ('currency_id', '=', currency_eur.id)
+            ], order='name desc', limit=1)
+            
+            tasa_eur_en_usd = latest_rate_eur.rate if latest_rate_eur else 1.0
+            
+            # Re-calculamos pasando por la simulación estricta de Odoo
+            monto_usd_simulado = round(monto_original / tasa_eur_en_usd, 2)
+            nuevo_monto_ves = round(monto_usd_simulado * tasa_bcv_ves, 2)
+            
+            # Forzamos la tasa al despeje real de lo que se va a guardar
+            tasa_final_guardar = round(nuevo_monto_ves / monto_original, 4)
+
+        # 4. Guardar datos respetando la correlación de la divisa original
+        if nuevo_monto_ves > 0:
+            self.write({
+                'amount_ves': nuevo_monto_ves,
+                'exchange_rate_bcv': tasa_final_guardar
+            })
+            _logger.info("[BESTPAY CORE] Recálculo exitoso. Moneda: %s. Tasa Directa: %s. Monto: %s VES", self.currency_id.name, tasa_final_guardar, nuevo_monto_ves)
 
     # Datos de origen del tercero
     bestpay_client_id = fields.Many2one(

@@ -5,6 +5,9 @@
         <field name="model">payment.transaction</field>
         <field name="inherit_id" ref="payment.payment_transaction_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//field[@name='token_id']" position="after">
+                <field name="uuid_hash" widget="CopyClipboardChar"/>
+            </xpath>
             <xpath expr="//sheet" position="inside">
                 <notebook>
                     <page string="Información BestPay API" name="bestpay_info">
