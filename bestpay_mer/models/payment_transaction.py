@@ -112,7 +112,7 @@ class PaymentTransaction(models.Model):
             "returnUrl": final_return_url,
             "merchantId": partner.mercantil_merchant_id or "",
             "invoiceNumber": {
-                "number": self.reference, 
+                "number": str(self.id).zfill(12), 
                 "invoiceCreationDate": fields.Date.today().strftime("%Y-%m-%d"),
                 "invoiceCancelledDate": ""
             },
