@@ -15,6 +15,9 @@
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
     ],
+    'external_dependencies': {
+        'python': ['Crypto'],
+    },
     'installable': True,
     'application': False,
     'auto_install': False,
