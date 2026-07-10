@@ -125,8 +125,7 @@ class BestPayApiController(http.Controller):
 
         # 7. Delegar el procesamiento al banco
         try:
-            # datos_banco = tx._bestpay_process_transaction_with_bank(kwargs)
-            datos_banco = {}
+            datos_banco = tx._bestpay_process_transaction_with_bank(kwargs)
         except Exception as e:
             return {'estado': 'error', 'mensaje': f'Error al comunicar con el banco: {str(e)}'}
 

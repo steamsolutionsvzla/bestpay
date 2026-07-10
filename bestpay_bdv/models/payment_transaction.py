@@ -186,3 +186,74 @@ class PaymentTransactionBDV(models.Model):
                 }, indent=2, ensure_ascii=False),
             })
             raise UserError(f"Error de conexión con el BDV: {str(e)}")
+    
+    @api.model_create_multi
+    def create(self, vals_list):
+        """
+        Sobrescribe create() para asignar automáticamente payment_method_id
+        cuando el proveedor es BDV. Resuelve la restricción NOT NULL de Odoo 19
+        sin modificar el módulo base de BestPay.
+        """
+        for vals in vals_list:
+            provider_id = vals.get('provider_id')
+            if provider_id and not vals.get('payment_method_id'):
+                provider = self.env['payment.provider'].sudo().browse(provider_id)
+                if provider.code == 'bdv':
+                    # Buscar o crear el método de pago BDV
+                    pm = self.env['payment.method'].sudo().search([
+                        ('code', '=', 'bdv_pagomovil'),
+                        ('active', '=', True)
+                    ], limit=1)
+                    
+                    if not pm:
+                        pm = self.env['payment.method'].sudo().create({
+                            'name': 'Pago Móvil BDV',
+                            'code': 'bdv_pagomovil',
+                            'active': True,
+                        })
+                        _logger.info(f"[BDV] Método de pago creado: {pm.name}")
+                    
+                    vals['payment_method_id'] = pm.id
+                    _logger.info(f"[BDV] payment_method_id asignado automáticamente: {pm.id}")
+        
+        return super().create(vals_list) 
+    
+    def _bestpay_process_transaction_with_bank(self, data):
+        """
+        Método llamado por el endpoint base de BestPay (Wilson).
+        Genera access_token + payment_link para flujo redirect BDV.
+        La conciliación real con el banco ocurre DESPUÉS cuando el cliente
+        llena el formulario web (/pago/bdv/procesar).
+
+        :param data: dict con los datos originales del request del ecommerce
+        :return: dict con datos de pago para respuesta al ecommerce
+        """
+        self.ensure_one()
+
+        # Solo procesar si el proveedor es BDV
+        if self.provider_id.code != 'bdv':
+            return {'estado': 'error', 'mensaje': 'Proveedor no es BDV'}
+
+        # Generar token de acceso seguro para el link de pago
+        import secrets
+        access_token = secrets.token_urlsafe(32)
+
+        # Construir el payment_link
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        payment_link = f"{base_url}/pago/bdv/checkout?id={self.id}&access_token={access_token}"
+
+        # Guardar en la transacción
+        self.write({
+            'access_token': access_token,
+            'payment_link': payment_link,
+            'bestpay_flow_type': 'redirect',
+        })
+
+        _logger.info(f"[BDV] Link generado para TX {self.id}: {payment_link}")
+
+        # Retornar en el formato que espera el endpoint base de Wilson
+        return {
+            'payment_link': payment_link,
+            'access_token': access_token,
+            'flow_type': 'redirect',
+        }

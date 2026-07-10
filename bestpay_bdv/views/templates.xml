@@ -97,23 +97,32 @@
                                             <p class="text-muted small text-uppercase fw-bold mb-1">
                                                 Monto a Cancelar
                                             </p>
-                                            <h2 class="amount-value mb-2">
-                                                <t t-esc="'%.2f' % transaction.amount"/> 
+                                         <!-- Mostrar monto en Bs usando amount_ves calculado por Wilson -->
+                                        <h2 class="amount-value mb-2">
+                                            <t t-if="transaction.amount_ves">
+                                                <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/>
+                                                <span style="font-size: 1rem; vertical-align: super;">Bs</span>
+                                            </t>
+                                            <t t-else="">
+                                                <!-- Fallback de seguridad -->
+                                                <t t-esc="'%.2f' % transaction.amount"/>
                                                 <t t-esc="transaction.currency_id.name"/>
-                                            </h2>
+                                            </t>
+                                        </h2>
+                                        <!-- Tasa aplicada para transparencia -->
+                                        <t t-if="transaction.exchange_rate_bcv">
+                                            <p class="text-muted small mb-0 mt-1">
+                                                <i class="fa fa-info-circle me-1"></i>
+                                                Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$
+                                            </p>
+                                        </t>
                                             <div class="mt-2">
                                                 <span class="badge-reference">
                                                     <i class="fa fa-file-invoice me-1"></i>
                                                     Ref: <t t-esc="transaction.external_reference or 'N/A'"/>
                                                 </span>
                                             </div>
-                                            <t t-if="transaction.client_note">
-                                                <p class="text-muted small mt-2 mb-0">
-                                                    <i class="fa fa-sticky-note me-1"></i>
-                                                    <t t-esc="transaction.client_note"/>
-                                                </p>
-                                            </t>
-                                        </div>
+                                    </div>
 
                                         <!-- Formulario de Pago Móvil -->
                                         <form action="/pago/bdv/procesar" method="post">

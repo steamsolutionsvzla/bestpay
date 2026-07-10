@@ -218,3 +218,5 @@ __marimo__/
 # Other files to ignore
 .vscode/
 docker-compose.yml
+
+/test.json
