@@ -4,7 +4,7 @@ import json
 import logging
 import hashlib
 from Crypto.Cipher import AES
-from Crypto.Util.padding import pad
+from Crypto.Util.Padding import pad
 
 from odoo import models, fields, api
 from odoo.exceptions import UserError
