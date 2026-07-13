@@ -79,20 +79,30 @@ class BestPayApiController(http.Controller):
         recalcular = False
         tasa_para_guardar = tasa_bcv # Por defecto es la tasa USD -> VES
 
+        # Buscamos la moneda USD en Odoo solo para el caso de reconversión de VES
+        currency_usd = request.env['res.currency'].sudo().search([('name', '=', 'USD')], limit=1)
+
+        # Variables temporales para el .create() que por defecto toman lo que viene de la API
+        monto_final_odoo = monto_recibido
+        currency_final = currency
+
         if currency_code.upper() == 'VES':
             monto_calculado_ves = monto_recibido
             monto_odoo_usd = round(monto_recibido / tasa_bcv, 2)
             recalcular = False
-            tasa_para_guardar = tasa_bcv # 1 Bolívar vale 1 Bolívar
+            tasa_para_guardar = tasa_bcv 
+            
+            # CAMBIO CLAVE: Si es VES, el monto principal de Odoo será USD
+            monto_final_odoo = monto_odoo_usd
+            currency_final = currency_usd
             
         elif currency_code.upper() == 'USD':
-            monto_odoo_usd = monto_recibido
             monto_calculado_ves = round(monto_recibido * tasa_bcv, 2)
             recalcular = True
             tasa_para_guardar = tasa_bcv # Guarda la tasa USD -> VES
             
         elif currency_code.upper() == 'EUR':
-            # CASO 3: Viene en EUR.
+            # CASO 3: Viene en EUR (Mantenemos intacta tu lógica original)
             currency_eur = request.env['res.currency'].sudo().search([('name', '=', 'EUR')], limit=1)
             latest_rate_eur = request.env['res.currency.rate'].sudo().search([
                 ('currency_id', '=', currency_eur.id)
@@ -100,15 +110,14 @@ class BestPayApiController(http.Controller):
             
             tasa_eur_en_usd = latest_rate_eur.rate if latest_rate_eur else 1.0
             
-            # 1. Calculamos el USD base redondeado (Tal como lo exige Odoo internamente)
+            # 1. Calculamos el USD base redondeado 
             monto_odoo_usd = round(monto_recibido / tasa_eur_en_usd, 2)
             
             # 2. Calculamos el monto final en VES usando el USD ya normalizado
             monto_calculado_ves = round(monto_odoo_usd * tasa_bcv, 2)
             recalcular = True
             
-            # 3. SOLUCIÓN: La tasa guardada es el resultado real y neto de la operación
-            # Evita cualquier discrepancia por decimales en auditorías.
+            # 3. La tasa guardada es el resultado real y neto de la operación
             tasa_para_guardar = round(monto_calculado_ves / monto_recibido, 4)
 
         # [Paso 6 - Creación del registro]
@@ -117,17 +126,17 @@ class BestPayApiController(http.Controller):
             
             tx = request.env['payment.transaction'].sudo().create({
                 'reference': internal_reference,
-                'amount': monto_recibido, # Odoo guarda el importe en la moneda original del documento
-                'currency_id': currency.id,
+                'amount': monto_final_odoo, # Dinámico: Guarda USD si vino VES, o el original si vino USD/EUR
+                'currency_id': currency_final.id, # Dinámico: Moneda USD si vino VES, o la original si vino USD/EUR
                 'provider_id': provider.id,
                 'partner_id': partner.id,                  
                 'bestpay_client_id': partner.id,           
                 'external_reference': external_reference,
                 'client_note': note,
-                # Campos de control BestPay
+                # Campos de control BestPay (Ahora todos los escenarios los aprovechan correctamente)
                 'amount_ves': monto_calculado_ves,
                 'exchange_rate_bcv': tasa_para_guardar,
-                'is_recalculable_ves': recalcular, # Aquí queda la bandera guardada
+                'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
             return {'estado': 'error', 'mensaje': f'Error en Odoo: {str(e)}'}
