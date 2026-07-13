@@ -120,6 +120,7 @@ class BestPayApiController(http.Controller):
             # 3. La tasa guardada es el resultado real y neto de la operación
             tasa_para_guardar = round(monto_calculado_ves / monto_recibido, 4)
 
+        payload_recibido = kwargs
         # [Paso 6 - Creación del registro]
         try:
             internal_reference = f"BPAY-{external_reference}-{fields.Datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -133,6 +134,7 @@ class BestPayApiController(http.Controller):
                 'bestpay_client_id': partner.id,           
                 'external_reference': external_reference,
                 'client_note': note,
+                'payment_request_payload': payload_recibido,
                 # Campos de control BestPay (Ahora todos los escenarios los aprovechan correctamente)
                 'amount_ves': monto_calculado_ves,
                 'exchange_rate_bcv': tasa_para_guardar,

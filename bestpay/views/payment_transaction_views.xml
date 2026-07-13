@@ -38,6 +38,14 @@
                         
                         <group string="Logs Técnicos de Comunicación" name="technical_logs">
                             <group colspan="2" col="1">
+                                <label for="payment_request_payload" string="Payload de Solicitud API Original (JSON)"/>
+                                <field name="payment_request_payload" 
+                                    placeholder="JSON con el Request original del tercero..." 
+                                    readonly="1" 
+                                    nolabel="1"
+                                    widget="ace" 
+                                    options="{'mode': 'javascript'}"/>
+                                    
                                 <label for="bank_response_json" string="Datos de Respuesta Estructurados (JSON)"/>
                                 <field name="bank_response_json" placeholder="JSON formateado para el cliente..." readonly="1" nolabel="1"/>
                                 

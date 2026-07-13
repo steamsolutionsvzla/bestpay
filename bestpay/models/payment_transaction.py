@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import secrets
+import json
 from odoo import models, fields, api
     
 _logger = logging.getLogger(__name__)
@@ -81,6 +82,12 @@ class PaymentTransaction(models.Model):
             # perfecta para URLs (usa caracteres A-Z, a-z, 0-9, -, y _).
             if not vals.get('uuid_hash'):
                 vals['uuid_hash'] = secrets.token_urlsafe(32)
+
+            if 'payment_request_payload' in vals and isinstance(vals['payment_request_payload'], (dict, list)):
+                try:
+                    vals['payment_request_payload'] = json.dumps(vals['payment_request_payload'], ensure_ascii=False, indent=4)
+                except Exception as e:
+                    _logger.error("[BESTPAY] No se pudo serializar el payload del tercero: %s", e)
                 
         return super(PaymentTransaction, self).create(vals_list)
 
@@ -214,4 +221,10 @@ class PaymentTransaction(models.Model):
     bank_raw_log = fields.Text(
         string="Log Crudo del Banco", 
         help="Respuesta exacta sin procesar recibida del API del banco."
+    )
+
+    payment_request_payload = fields.Text(
+        string="Payload de Solicitud API",
+        readonly=True,
+        help="Cuerpo completo (JSON/Dict) enviado por el tercero para originar la transacción."
     )
