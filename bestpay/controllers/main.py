@@ -14,7 +14,7 @@ class BestPayApiController(http.Controller):
         # 1. Obtener y validar el Token desde las cabeceras
         auth_header = request.httprequest.headers.get('Authorization')
         if not auth_header:
-            return {'estado': 'error', 'mensaje': 'Falta cabecera Authorization.'}
+            return {'status': 'error', 'message': 'Falta cabecera Authorization.'}
         
         parts = auth_header.split(' ')
         if len(parts) == 2 and parts[0].lower() == 'bearer':
@@ -25,7 +25,7 @@ class BestPayApiController(http.Controller):
         # Al usar auth='none', necesitamos forzar el uso de una base de datos si hay varias en el sistema
         # Odoo 19 requiere que request.env esté asociado a un registro válido.
         if not request.db:
-            return {'estado': 'error', 'mensaje': 'Base de datos no especificada en la petición.'}
+            return {'status': 'error', 'message': 'Base de datos no especificada en la petición.'}
 
         # 2. Validar que el cliente exista utilizando .sudo() de manera segura
         partner = request.env['res.partner'].sudo().search([
@@ -34,7 +34,7 @@ class BestPayApiController(http.Controller):
         ], limit=1)
         
         if not partner:
-            return {'estado': 'error', 'mensaje': 'Token inválido o cliente no autorizado.'}
+            return {'status': 'error', 'message': 'Token inválido o cliente no autorizado.'}
 
         # 3. Leer los datos directamente de kwargs (inyectados por type='json')
         provider_code = kwargs.get('provider')
@@ -46,8 +46,8 @@ class BestPayApiController(http.Controller):
         # Validaciones de campos obligatorios
         if not all([provider_code, currency_code, amount, external_reference]):
             return {
-                'estado': 'error', 
-                'mensaje': 'Faltan campos obligatorios: (provider, currency, amount, external_reference).'
+                'status': 'error', 
+                'message': 'Faltan campos obligatorios: (provider, currency, amount, external_reference).'
             }
         
         if external_reference:
@@ -62,22 +62,22 @@ class BestPayApiController(http.Controller):
 
             if transaccion_duplicada:
                 return {
-                    'estado': 'error',
-                    'mensaje': f'Transacción duplicada. La referencia externa "{external_reference}" ya está registrada para este cliente.',
+                    'status': 'error',
+                    'message': f'Transacción duplicada. La referencia externa "{external_reference}" ya está registrada para este cliente.',
                     # Opcional: Le devuelves los datos de la que ya existe por si necesita recuperarla
-                    'transaccion_id': transaccion_duplicada.id,
+                    'transaction_id': transaccion_duplicada.id,
                     'odoo_reference': transaccion_duplicada.reference,
                     'uuid_hash': transaccion_duplicada.uuid_hash,
-                    'estado_actual': dict(transaccion_duplicada._fields['state']._description_selection(request.env)).get(transaccion_duplicada.state),
+                    'transaction_status': dict(transaccion_duplicada._fields['state']._description_selection(request.env)).get(transaccion_duplicada.state),
                 }
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
         if not provider:
-            return {'estado': 'error', 'mensaje': f'El proveedor "{provider_code}" no existe.'}
+            return {'status': 'error', 'message': f'El proveedor "{provider_code}" no existe.'}
         
         if provider.id not in partner.allowed_provider_ids.ids:
-            return {'estado': 'error', 'mensaje': f'El proveedor "{provider_code}" no está permitido para este cliente.'}
+            return {'status': 'error', 'message': f'El proveedor "{provider_code}" no está permitido para este cliente.'}
         
         method_code = kwargs.get('payment_method')
         payment_method = False
@@ -95,14 +95,14 @@ class BestPayApiController(http.Controller):
         # Validación final por seguridad
         if not payment_method:
             return {
-                'estado': 'error', 
-                'mensaje': f'No se encontró un método de pago válido para el proveedor "{provider_code}". '
+                'status': 'error', 
+                'message': f'No se encontró un método de pago válido para el proveedor "{provider_code}". '
             }
         
         # 5. Validar Moneda
         currency = request.env['res.currency'].sudo().search([('name', '=', str(currency_code).upper())], limit=1)
         if not currency:
-            return {'estado': 'error', 'mensaje': f'La moneda "{currency_code}" no existe.'}
+            return {'status': 'error', 'message': f'La moneda "{currency_code}" no existe.'}
         
         # Forzamos la verificación/búsqueda de la tasa actual
         # Creamos un registro dummy o usamos el entorno para invocar el método auxiliar
@@ -112,9 +112,9 @@ class BestPayApiController(http.Controller):
         try:
             monto_recibido = float(amount)
             if monto_recibido <= 0:
-                return {'estado': 'error', 'mensaje': 'El monto debe ser un valor mayor a cero.'}
+                return {'status': 'error', 'message': 'El monto debe ser un valor mayor a cero.'}
         except (ValueError, TypeError):
-            return {'estado': 'error', 'mensaje': 'El formato del campo "amount" es inválido.'}
+            return {'status': 'error', 'message': 'El formato del campo "amount" es inválido.'}
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
         recalcular = False
@@ -183,21 +183,34 @@ class BestPayApiController(http.Controller):
                 'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
-            return {'estado': 'error', 'mensaje': f'Error en Odoo: {str(e)}'}
+            return {'status': 'error', 'message': f'Error en Odoo: {str(e)}'}
 
         # 7. Delegar el procesamiento al banco
         try:
             datos_banco = tx._bestpay_process_transaction_with_bank(kwargs)
         except Exception as e:
-            return {'estado': 'error', 'mensaje': f'Error al comunicar con el banco: {str(e)}'}
+            error_msg = f'Error al comunicar con el banco: {str(e)}'
+            
+            # --- SOLUCIÓN: Marcamos la transacción como fallida en Odoo ---
+            try:
+                tx._set_error(error_msg)
+            except Exception as tx_err:
+                # Respaldo por si _set_error falla debido a alguna restricción interna de Odoo
+                tx.write({'state': 'error', 'bank_raw_log': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
+            
+            return {
+                'status': 'error', 
+                'message': error_msg,
+                'transaction_status': 'error'  # Le avisamos al tercero que el registro quedó en error
+            }
 
         # 8. Respuesta exitosa
         return {
-            'estado': 'exitoso',
-            'transaccion_id': tx.id,
+            'status': 'success',
+            'transaction_id': tx.id,
             'odoo_reference': tx.reference,
-            'referencia_externa': tx.external_reference,
+            'external_reference': tx.external_reference,
             'uuid_hash': tx.uuid_hash,
-            'tipo_flujo': tx.bestpay_flow_type,
-            'datos_pago': datos_banco
+            'flow_type': tx.bestpay_flow_type,
+            'payment_details': datos_banco
         }

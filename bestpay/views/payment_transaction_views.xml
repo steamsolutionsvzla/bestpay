@@ -45,12 +45,12 @@
                                     nolabel="1"
                                     widget="ace" 
                                     options="{'mode': 'javascript'}"/>
-                                    
+
                                 <label for="bank_response_json" string="Datos de Respuesta Estructurados (JSON)"/>
-                                <field name="bank_response_json" placeholder="JSON formateado para el cliente..." readonly="1" nolabel="1"/>
+                                <field name="bank_response_json" placeholder="JSON formateado para el cliente..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                                 
                                 <label for="bank_raw_log" string="Log Crudo del Banco" class="mt-3"/>
-                                <field name="bank_raw_log" placeholder="Respuesta cruda del banco..." readonly="1" nolabel="1"/>
+                                <field name="bank_raw_log" placeholder="Respuesta cruda del banco..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                             </group>
                         </group>
                     </page>
