@@ -49,6 +49,27 @@ class BestPayApiController(http.Controller):
                 'estado': 'error', 
                 'mensaje': 'Faltan campos obligatorios: (provider, currency, amount, external_reference).'
             }
+        
+        if external_reference:
+            # Buscamos si ya existe una transacción aprobada, pendiente o en borrador 
+            # para este mismo cliente con esa misma referencia externa.
+            transaccion_duplicada = request.env['payment.transaction'].sudo().search([
+                ('bestpay_client_id', '=', partner.id),
+                ('external_reference', '=', external_reference),
+                # Dependiendo de tu lógica, puedes filtrar por estados no fallidos:
+                ('state', 'not in', ['cancel', 'error']) 
+            ], limit=1)
+
+            if transaccion_duplicada:
+                return {
+                    'estado': 'error',
+                    'mensaje': f'Transacción duplicada. La referencia externa "{external_reference}" ya está registrada para este cliente.',
+                    # Opcional: Le devuelves los datos de la que ya existe por si necesita recuperarla
+                    'transaccion_id': transaccion_duplicada.id,
+                    'odoo_reference': transaccion_duplicada.reference,
+                    'uuid_hash': transaccion_duplicada.uuid_hash,
+                    'estado_actual': dict(transaccion_duplicada._fields['state']._description_selection(request.env)).get(transaccion_duplicada.state),
+                }
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
@@ -57,7 +78,27 @@ class BestPayApiController(http.Controller):
         
         if provider.id not in partner.allowed_provider_ids.ids:
             return {'estado': 'error', 'mensaje': f'El proveedor "{provider_code}" no está permitido para este cliente.'}
+        
+        method_code = kwargs.get('payment_method')
+        payment_method = False
+        # Intento 1: Si el tercero envió un método específico, lo buscamos
+        if method_code:
+            payment_method = request.env['payment.method'].sudo().search([
+                ('code', '=', str(method_code).lower()),
+                ('provider_ids', 'in', provider.id) # Aseguramos que pertenezca a este proveedor
+            ], limit=1)
 
+        # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
+        if not payment_method:
+            payment_method = provider.payment_method_ids[:1]
+
+        # Validación final por seguridad
+        if not payment_method:
+            return {
+                'estado': 'error', 
+                'mensaje': f'No se encontró un método de pago válido para el proveedor "{provider_code}". '
+            }
+        
         # 5. Validar Moneda
         currency = request.env['res.currency'].sudo().search([('name', '=', str(currency_code).upper())], limit=1)
         if not currency:
@@ -130,6 +171,7 @@ class BestPayApiController(http.Controller):
                 'amount': monto_final_odoo, # Dinámico: Guarda USD si vino VES, o el original si vino USD/EUR
                 'currency_id': currency_final.id, # Dinámico: Moneda USD si vino VES, o la original si vino USD/EUR
                 'provider_id': provider.id,
+                'payment_method_id': payment_method.id,
                 'partner_id': partner.id,                  
                 'bestpay_client_id': partner.id,           
                 'external_reference': external_reference,
