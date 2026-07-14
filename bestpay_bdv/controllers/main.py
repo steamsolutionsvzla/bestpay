@@ -89,14 +89,10 @@ class BestpayBDVController(http.Controller):
                 content_type='application/json'
             )
 
-        # 4. Generar token de acceso para el link de pago (seguridad)
-        access_token = secrets.token_urlsafe(32)
-
-        # 5. Buscar o crear automáticamente el método de pago
+        # 4. Buscar o crear automáticamente el método de pago
         payment_method = request.env['payment.method'].sudo().search([
             ('active', '=', True)
         ], limit=1)
-        
         if not payment_method:
             payment_method = request.env['payment.method'].sudo().create({
                 'name': 'Pago Móvil BDV',
@@ -107,14 +103,13 @@ class BestpayBDVController(http.Controller):
 
         seq_ref = request.env['ir.sequence'].sudo().next_by_code('bestpay.transaction.seq')
         if not seq_ref:
-            # Fallback: si la secuencia falla, usar timestamp
             import time
             seq_ref = str(int(time.time()))[-6:]
             _logger.warning(f"[API] Secuencia no disponible, usando fallback: {seq_ref}")
-        
+
         reference = f"BP-{external_ref or 'NOREF'}-{seq_ref}"
 
-        # 7. Crear la transacción en Odoo
+        # 5. Crear la transacción en Odoo (El uuid_hash se genera automáticamente por el módulo bestpay)
         try:
             transaction = request.env['payment.transaction'].sudo().create({
                 'provider_id': provider.id,
@@ -125,24 +120,19 @@ class BestpayBDVController(http.Controller):
                 'external_reference': external_ref,
                 'client_note': data.get('client_note', ''),
                 'reference': reference,
-                'access_token': access_token,
                 'state': 'draft',
             })
-            
-            # 7. Construir y GUARDAR el link de pago en la transacción
-            base_url = request.httprequest.url_root.rstrip('/')
-            payment_link = f"{base_url}/pago/bdv/checkout?id={transaction.id}&access_token={access_token}"
-            
-            # IMPORTANTE: Guardar el link en la base de datos
-            transaction.sudo().write({'payment_link': payment_link})
-            
-            _logger.info(f"[API] Transacción creada: ID {transaction.id}, Link: {payment_link}")
+
+            # Llamar al método del banco para que genere el link oficial con el uuid_hash
+            datos_banco = transaction._bestpay_process_transaction_with_bank(data)
+            payment_link = datos_banco.get('payment_link')
 
             return Response(
                 json.dumps({
                     "success": True,
                     "transaction_id": transaction.id,
                     "payment_link": payment_link,
+                    "uuid_hash": transaction.uuid_hash,
                     "amount": amount,
                     "currency": currency_name,
                     "external_reference": external_ref
@@ -163,30 +153,32 @@ class BestpayBDVController(http.Controller):
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
     # =====================================================
     @http.route('/pago/bdv/checkout', type='http', auth='none', website=False)
-    def bdv_checkout(self, id=None, access_token=None, **kw):
+    def bdv_checkout(self, hash=None, **kw):
         """
-        Muestra el formulario de pago móvil. 
-        website=False asegura que no cargue el layout de Odoo (si estuviera instalado).
+        Muestra el formulario de pago móvil usando el uuid_hash.
         """
-        if not id or not access_token:
+        if not hash:
             return request.not_found()
-
-        # Buscar transacción y validar token
-        transaction = request.env['payment.transaction'].sudo().browse(int(id))
-        if not transaction.exists() or transaction.access_token != access_token:
+        
+        # Buscar por uuid_hash en lugar de ID
+        transaction = request.env['payment.transaction'].sudo().search([
+            ('uuid_hash', '=', hash)
+        ], limit=1)
+        
+        if not transaction.exists():
             return request.not_found()
-
+            
         if transaction.state == 'done':
             return request.render('bestpay_bdv.bdv_checkout_result', {
                 'transaction': transaction,
                 'status': 'success',
                 'message': 'Este pago ya fue procesado exitosamente.'
             })
-
+        
         # Renderizar el formulario standalone
         return request.render('bestpay_bdv.bdv_checkout_form', {
             'transaction': transaction,
-            'access_token': access_token,
+            'hash': hash,
         })
 
     # =====================================================
@@ -194,19 +186,17 @@ class BestpayBDVController(http.Controller):
     # =====================================================
     @http.route('/pago/bdv/procesar', type='http', auth='none', methods=['POST'], csrf=False)
     def bdv_process_payment(self, **post):
-        """
-        Recibe los datos del formulario, los guarda en la transacción 
-        y llama al método de conciliación del BDV.
-        """
-        tx_id = post.get('transaction_id')
-        access_token = post.get('access_token')
-
-        if not tx_id or not access_token:
+        tx_hash = post.get('hash')
+        if not tx_hash:
+            return request.not_found()
+            
+        transaction = request.env['payment.transaction'].sudo().search([
+            ('uuid_hash', '=', tx_hash)
+        ], limit=1)
+        
+        if not transaction.exists():
             return request.not_found()
 
-        transaction = request.env['payment.transaction'].sudo().browse(int(tx_id))
-        if not transaction.exists() or transaction.access_token != access_token:
-            return request.not_found()
 
         # Mapear datos del formulario a los campos del modelo
         cedula_raw = post.get('cedula', '')

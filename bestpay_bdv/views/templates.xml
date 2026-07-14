@@ -126,8 +126,7 @@
 
                                         <!-- Formulario de Pago Móvil -->
                                         <form action="/pago/bdv/procesar" method="post">
-                                            <input type="hidden" name="transaction_id" t-att-value="transaction.id"/>
-                                            <input type="hidden" name="access_token" t-att-value="access_token"/>
+                                            <input type="hidden" name="hash" t-att-value="hash"/>
 
                                             <h5 class="text-muted mb-3 fw-bold">
                                                 <i class="fa fa-mobile me-2"></i> Datos del Pago Móvil

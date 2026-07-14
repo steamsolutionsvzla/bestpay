@@ -11,13 +11,6 @@ _logger = logging.getLogger(__name__)
 class PaymentTransactionBDV(models.Model):
     _inherit = 'payment.transaction'
 
-    access_token = fields.Char(
-        string="Token de Acceso",
-        help="Token único y seguro para validar el link de pago. Evita que alguien adivine el ID de la transacción.",
-        copy=False,
-        readonly=True,
-    )
-
     payment_link = fields.Char(
         string="Link de Pago",
         help="URL completa del formulario de pago que se envía al cliente final.",
@@ -221,39 +214,25 @@ class PaymentTransactionBDV(models.Model):
     def _bestpay_process_transaction_with_bank(self, data):
         """
         Método llamado por el endpoint base de BestPay (Wilson).
-        Genera access_token + payment_link para flujo redirect BDV.
-        La conciliación real con el banco ocurre DESPUÉS cuando el cliente
-        llena el formulario web (/pago/bdv/procesar).
-
-        :param data: dict con los datos originales del request del ecommerce
-        :return: dict con datos de pago para respuesta al ecommerce
+        Usa el uuid_hash existente para construir el link de pago.
         """
         self.ensure_one()
-
-        # Solo procesar si el proveedor es BDV
         if self.provider_id.code != 'bdv':
             return {'estado': 'error', 'mensaje': 'Proveedor no es BDV'}
-
-        # Generar token de acceso seguro para el link de pago
-        import secrets
-        access_token = secrets.token_urlsafe(32)
-
-        # Construir el payment_link
+        
+        # Usamos el uuid_hash generado por el módulo principal bestpay
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
-        payment_link = f"{base_url}/pago/bdv/checkout?id={self.id}&access_token={access_token}"
-
-        # Guardar en la transacción
+        payment_link = f"{base_url}/pago/bdv/checkout?hash={self.uuid_hash}"
+        
         self.write({
-            'access_token': access_token,
             'payment_link': payment_link,
             'bestpay_flow_type': 'redirect',
         })
-
-        _logger.info(f"[BDV] Link generado para TX {self.id}: {payment_link}")
-
-        # Retornar en el formato que espera el endpoint base de Wilson
+        
+        _logger.info(f"[BDV] Link generado con UUID_HASH para TX {self.id}: {payment_link}")
+        
         return {
             'payment_link': payment_link,
-            'access_token': access_token,
+            'uuid_hash': self.uuid_hash,
             'flow_type': 'redirect',
         }
