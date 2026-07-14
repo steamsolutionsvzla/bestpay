@@ -10,7 +10,8 @@
                     <group>
                         <group string="Configuración de Acceso">
                             <field name="is_api_client"/>
-                            <field name="bestpay_token" invisible="not is_api_client" password="True"/>
+                            <field name="bestpay_client_id"/>
+                            <field name="bestpay_client_secret" password="True"/>
                         </group>
                         <group string="Permisos de Pasarelas" invisible="not is_api_client">
                             <field name="allowed_provider_ids" widget="many2many_tags" options="{'no_create': True}"/>

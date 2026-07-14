@@ -11,30 +11,35 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
-        # 1. Obtener y validar el Token desde las cabeceras
-        auth_header = request.httprequest.headers.get('Authorization')
-        if not auth_header:
-            return {'status': 'error', 'message': 'Falta cabecera Authorization.'}
+        # 1. Validar credenciales M2M (Client Credentials)
+        auth_header = request.httprequest.headers.get('Authorization', '')
         
-        parts = auth_header.split(' ')
-        if len(parts) == 2 and parts[0].lower() == 'bearer':
-            token = parts[1].strip()
-        else:
-            token = auth_header.strip()
+        if not auth_header.startswith('Basic '):
+            return {
+                'status': 'error',
+                'message': 'Autenticación requerida. Use Basic Auth con Client ID y Client Secret.'
+            }
         
-        # Al usar auth='none', necesitamos forzar el uso de una base de datos si hay varias en el sistema
-        # Odoo 19 requiere que request.env esté asociado a un registro válido.
+        import base64
+        try:
+            credentials = base64.b64decode(auth_header[6:]).decode('utf-8')
+            client_id, client_secret = credentials.split(':', 1)
+        except (ValueError, UnicodeDecodeError):
+            return {'status': 'error', 'message': 'Credenciales Basic malformadas.'}
+
+        # Al usar auth='none', necesitamos forzar el uso de una base de datos
         if not request.db:
             return {'status': 'error', 'message': 'Base de datos no especificada en la petición.'}
 
-        # 2. Validar que el cliente exista utilizando .sudo() de manera segura
+        # 2. Validar que el cliente exista
         partner = request.env['res.partner'].sudo().search([
             ('is_api_client', '=', True),
-            ('bestpay_token', '=', token)
+            ('bestpay_client_id', '=', client_id),
+            ('bestpay_client_secret', '=', client_secret),
         ], limit=1)
         
         if not partner:
-            return {'status': 'error', 'message': 'Token inválido o cliente no autorizado.'}
+            return {'status': 'error', 'message': 'Credenciales inválidas o cliente no autorizado.'}
 
         # 3. Leer los datos directamente de kwargs (inyectados por type='json')
         provider_code = kwargs.get('provider')
@@ -91,6 +96,10 @@ class BestPayApiController(http.Controller):
         # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
         if not payment_method:
             payment_method = provider.payment_method_ids[:1]
+
+        # Fallback BestPay: Buscar cualquier método activo si es proveedor BestPay
+        if not payment_method and getattr(provider, 'is_bestpay_provider', False):
+            payment_method = request.env['payment.method'].sudo().search([('active', '=', True)], limit=1)
 
         # Validación final por seguridad
         if not payment_method:

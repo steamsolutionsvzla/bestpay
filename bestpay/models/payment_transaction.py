@@ -23,10 +23,18 @@ class ResPartner(models.Model):
         help="Indica si este tercero está autorizado para consumir la API de BestPay.",
         default=False
     )
-    bestpay_token = fields.Char(
-        string="Token API BestPay", 
-        help="Token único para autenticar las peticiones de este cliente."
+
+    bestpay_client_id = fields.Char(
+        string="BestPay Client ID",
+        help="Identificador público para autenticación M2M.",
+        copy=False,
     )
+    bestpay_client_secret = fields.Char(
+        string="BestPay Client Secret",
+        help="Credencial privada para autenticación M2M.",
+        copy=False,
+    )
+
     allowed_provider_ids = fields.Many2many(
         'payment.provider',
         'res_partner_payment_provider_rel',
