@@ -15,7 +15,6 @@
             <field name="code">bdv</field>
             <field name="state">enabled</field>
             <field name="bdv_api_url">https://bdvconciliacionqa.banvenez.com:444/getMovement/v2</field>
-            <field name="bdv_telefono_destino">04127141363</field>
             <field name="bdv_environment">qa</field>
             <field name="payment_method_ids" eval="[(4, ref('payment_method_bdv_pagomovil'))]"/>
         </record>
