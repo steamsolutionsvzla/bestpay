@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_form_inherit_bestpay_bdv" model="ir.ui.view">
+        <field name="name">res.partner.form.inherit.bestpay.bdv</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+            <!-- Insertamos la pestaña DESPUÉS de la pestaña "BestPay API" -->
+            <xpath expr="//page[@name='bestpay_api']" position="after">
+                <page string="API BDV (BestPay)"
+                      name="bestpay_bdv"
+                      invisible="not is_api_client">
+
+                    <!-- Contenedor que se muestra SOLO si el BDV está en los providers permitidos -->
+                    <div invisible="not allowed_provider_ids or %(bestpay_bdv.payment_provider_bdv)d not in allowed_provider_ids">
+                        <group string="Credenciales del Banco de Venezuela">
+                            <group>
+                                <field name="bdv_api_key"
+                                       password="True"
+                                       placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+                            <group>
+                                <field name="bdv_telefono_destino"
+                                       placeholder="04127141363"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+                        </group>
+                    </div>
+
+                    <!-- Mensaje de advertencia cuando NO se ha seleccionado el BDV -->
+                    <div invisible="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids">
+                        <p class="text-muted text-center py-3">
+                            ⚠️ Seleccione "Banco de Venezuela" en la lista de métodos de pago permitidos para habilitar sus campos de configuración.
+                        </p>
+                    </div>
+
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

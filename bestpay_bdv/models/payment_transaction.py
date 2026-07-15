@@ -79,8 +79,10 @@ class PaymentTransactionBDV(models.Model):
         if provider.code != 'bdv':
             raise UserError("Este método solo aplica para el proveedor BDV.")
 
-        # 1. Obtener credenciales del provider
-        creds = provider.bdv_get_api_credentials()
+        # 1. Obtener credenciales del provider, pasando el partner (comercio)
+        # para que tome la API Key y teléfono destino del partner, no del provider
+        creds = provider.bdv_get_api_credentials(partner=self.partner_id)
+        
         if not creds['api_key']:
             raise UserError("Falta configurar la API Key del BDV en el proveedor de pago.")
 

@@ -54,7 +54,7 @@ class PaymentTransaction(models.Model):
     )
     exchange_rate_bcv = fields.Float(
         string="Tasa BCV Aplicada",
-        digits=(12, 4),
+        digits=(12, 2),
         help="La tasa oficial del BCV utilizada en el momento exacto de crear esta transacción."
     )
 

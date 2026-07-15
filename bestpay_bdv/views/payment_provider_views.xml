@@ -13,15 +13,12 @@
                     <group string="Configuración Banco de Venezuela" 
                            invisible="code != 'bdv'">
                         <group>
-                            <field name="bdv_api_key" 
-                                   password="True"
-                                   placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"/>
+                            <!-- NOTA: bdv_api_key se movió a res.partner -->
                             <field name="bdv_api_url" 
                                    placeholder="https://bdvconciliacionqa.banvenez.com:444/getMovement/v2"/>
                         </group>
                         <group>
-                            <field name="bdv_telefono_destino" 
-                                   placeholder="04127141363"/>
+                            <!-- NOTA: bdv_telefono_destino se movió a res.partner -->
                             <field name="bdv_environment"/>
                             <field name="bdv_test_date"/>
                         </group>

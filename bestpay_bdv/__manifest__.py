@@ -11,9 +11,15 @@
     'data': [
         'security/ir.model.access.csv',
         'data/payment_provider_data.xml',
+        'views/res_partner_views.xml',
         'views/payment_provider_views.xml',
         'views/templates.xml',
     ],
+    'assets': {
+        'web.assets_frontend': [
+            'bestpay_bdv/static/src/js/bdv_checkout.js',
+        ],
+    },
     'installable': True,
     'application': False,
     'auto_install': False,
