@@ -219,20 +219,24 @@ class PaymentTransactionBDV(models.Model):
         Usa el uuid_hash existente para construir el link de pago.
         """
         self.ensure_one()
+        
+        # DEBUG: Comprobar que entramos aquí (sin emojis para evitar errores de codificación)
+        _logger.warning("[BDV DEBUG] Entrando a procesar la transaccion %s", self.id)
+
         if self.provider_id.code != 'bdv':
             return {'estado': 'error', 'mensaje': 'Proveedor no es BDV'}
-        
+
         # Usamos el uuid_hash generado por el módulo principal bestpay
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         payment_link = f"{base_url}/pago/bdv/checkout?hash={self.uuid_hash}"
-        
+
         self.write({
             'payment_link': payment_link,
             'bestpay_flow_type': 'redirect',
         })
-        
-        _logger.info(f"[BDV] Link generado con UUID_HASH para TX {self.id}: {payment_link}")
-        
+
+        _logger.info("[BDV] Link generado con UUID_HASH para TX %s: %s", self.id, payment_link)
+
         return {
             'payment_link': payment_link,
             'uuid_hash': self.uuid_hash,
