@@ -2,7 +2,7 @@
 import logging
 import secrets
 import json
-from odoo import models, fields, api
+from odoo import models, fields, api, _
     
 _logger = logging.getLogger(__name__)
 
@@ -236,3 +236,18 @@ class PaymentTransaction(models.Model):
         readonly=True,
         help="Cuerpo completo (JSON/Dict) enviado por el tercero para originar la transacción."
     )
+
+    def _bestpay_process_transaction_with_bank(self, api_kwargs):
+        """
+        Punto de entrada base. Si ningún módulo satélite hereda este método
+        para procesar un proveedor específico, se caerá aquí de forma segura.
+        """
+        self.ensure_one()
+        _logger.warning(
+            "[BESTPAY BASE] No hay ningún procesador instalado para el proveedor: %s", 
+            self.provider_id.code
+        )
+        # Devolvemos un diccionario vacío o un mensaje de error para que la API lo maneje
+        return {
+            "error": _("El proveedor de pago %s no está soportado en este momento.") % self.provider_id.code
+        }

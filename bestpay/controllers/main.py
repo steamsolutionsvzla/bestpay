@@ -214,6 +214,18 @@ class BestPayApiController(http.Controller):
                 'message': error_msg,
                 'transaction_status': 'error'  # Le avisamos al tercero que el registro quedó en error
             }
+        
+        if datos_banco and 'error' in datos_banco:
+            try:
+                tx._set_error(datos_banco['error'])
+            except Exception as tx_err:
+                tx.write({'state': 'error', 'bank_raw_log': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
+            
+            return {
+                'status': 'error', 
+                'message': datos_banco['error'],
+                'transaction_status': 'error'  # Le avisamos al tercero que el registro quedó en error
+            }
 
         # 8. Respuesta exitosa
         return {

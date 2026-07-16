@@ -72,7 +72,7 @@ class PaymentTransaction(models.Model):
                 "redirect_url": redirect_url_odoo
             }
             
-        return {}
+        return super()._bestpay_process_transaction_with_bank(api_kwargs)
 
     # =========================================================================
     # FUNCIONES DE CONSTRUCCIÓN Y ENCRIPTACIÓN (MERCANTIL)
