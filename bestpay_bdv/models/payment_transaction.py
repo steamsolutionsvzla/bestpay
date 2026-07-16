@@ -215,18 +215,18 @@ class PaymentTransactionBDV(models.Model):
     
     def _bestpay_process_transaction_with_bank(self, data):
         """
-        Método llamado por el endpoint base de BestPay (Wilson).
+        Método llamado por el endpoint base de BestPay.
         Usa el uuid_hash existente para construir el link de pago.
         """
         self.ensure_one()
-        
-        # DEBUG: Comprobar que entramos aquí (sin emojis para evitar errores de codificación)
-        _logger.warning("[BDV DEBUG] Entrando a procesar la transaccion %s", self.id)
 
+        # Si NO es BDV, le pasamos el control al siguiente módulo en la cadena (Mercantil)
         if self.provider_id.code != 'bdv':
-            return {'estado': 'error', 'mensaje': 'Proveedor no es BDV'}
+            return super()._bestpay_process_transaction_with_bank(data)
 
-        # Usamos el uuid_hash generado por el módulo principal bestpay
+        # Si SÍ es BDV, procesamos nuestra lógica
+        _logger.info("[BDV] Procesando transacción %s", self.id)
+
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         payment_link = f"{base_url}/pago/bdv/checkout?hash={self.uuid_hash}"
 

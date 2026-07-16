@@ -94,9 +94,14 @@ class BestPayApiController(http.Controller):
                 ('provider_ids', 'in', provider.id)
             ], limit=1)
 
-        # Intento 2: Si no lo envió, tomamos el primero que esté VINCULADO a este proveedor
+         # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
         if not payment_method:
             payment_method = provider.payment_method_ids[:1]
+
+        # Fallback BestPay: Buscar cualquier método activo si es proveedor BestPay
+        # NOTA: Esto es temporal solo para desarrollo local
+        # if not payment_method and getattr(provider, 'is_bestpay_provider', False):
+        #     payment_method = request.env['payment.method'].sudo().search([('active', '=', True)], limit=1)
 
         # VALIDACIÓN ESTRICTA: Si sigue sin haber método, ¡ERROR REAL! (No más silent fails)
         if not payment_method:
