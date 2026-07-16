@@ -86,26 +86,23 @@ class BestPayApiController(http.Controller):
         
         method_code = kwargs.get('payment_method')
         payment_method = False
-        # Intento 1: Si el tercero envió un método específico, lo buscamos
+        
+        # Intento 1: Si el tercero envió un método específico, lo buscamos y verificamos que pertenezca al proveedor
         if method_code:
             payment_method = request.env['payment.method'].sudo().search([
                 ('code', '=', str(method_code).lower()),
-                ('provider_ids', 'in', provider.id) # Aseguramos que pertenezca a este proveedor
+                ('provider_ids', 'in', provider.id)
             ], limit=1)
 
-        # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
+        # Intento 2: Si no lo envió, tomamos el primero que esté VINCULADO a este proveedor
         if not payment_method:
             payment_method = provider.payment_method_ids[:1]
 
-        # Fallback BestPay: Buscar cualquier método activo si es proveedor BestPay
-        if not payment_method and getattr(provider, 'is_bestpay_provider', False):
-            payment_method = request.env['payment.method'].sudo().search([('active', '=', True)], limit=1)
-
-        # Validación final por seguridad
+        # VALIDACIÓN ESTRICTA: Si sigue sin haber método, ¡ERROR REAL! (No más silent fails)
         if not payment_method:
             return {
                 'status': 'error', 
-                'message': f'No se encontró un método de pago válido para el proveedor "{provider_code}". '
+                'message': f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.'
             }
         
         # 5. Validar Moneda
