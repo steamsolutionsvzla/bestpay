@@ -7,7 +7,6 @@
     'depends': [
         'payment',
         'bestpay',
-        'bestpay_mer',
     ],
     'data': [
         'security/ir.model.access.csv',
