@@ -195,21 +195,6 @@
                                                 <small class="text-muted">Lo encuentras en tu comprobante de pago móvil</small>
                                             </div>
 
-                                            <!-- Monto Transferido -->
-                                            <div class="mb-4">
-                                                <label class="form-label">Monto Transferido (Bs)</label>
-                                                <div class="input-group">
-                                                    <span class="input-group-text bg-white">Bs</span>
-                                                    <input type="number" 
-                                                           step="0.01" 
-                                                           class="form-control" 
-                                                           name="importe" 
-                                                           placeholder="0.00"
-                                                           required="1"/>
-                                                </div>
-                                                <small class="text-muted">Ingresa el monto exacto en Bolívares</small>
-                                            </div>
-
                                             <!-- Botones -->
                                             <div class="d-grid gap-2">
                                                 <button type="submit" class="btn btn-bdv btn-lg">
@@ -218,6 +203,12 @@
                                                 <a href="about:blank" class="btn btn-light btn-lg border text-muted">
                                                     Cancelar
                                                 </a>
+                                            </div>
+
+                                            <!-- Monto Transferido (Automático) -->
+                                            <div class="mb-4">
+                                                <!-- Campo oculto por compatibilidad, aunque el monto real se fuerza en el backend -->
+                                                <input type="hidden" name="importe" t-att-value="transaction.amount_ves or transaction.amount"/>
                                             </div>
 
                                             <div class="text-center mt-3">

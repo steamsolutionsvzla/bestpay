@@ -197,7 +197,6 @@ class BestpayBDVController(http.Controller):
         if not transaction.exists():
             return request.not_found()
 
-
         # Mapear datos del formulario a los campos del modelo
         cedula_raw = post.get('cedula', '')
         tipo_cedula = post.get('tipo_cedula', 'V')
@@ -209,19 +208,40 @@ class BestpayBDVController(http.Controller):
         else:
             telefono_pagador = telefono_raw
 
-        try:
-            importe = f"{float(str(post.get('importe', '0')).replace(',', '.')):.2f}"
-        except ValueError:
-            importe = "0.00"
+        # =====================================================
+        # LÓGICA DE MONTO: QA (Hardcodeado) vs PRODUCCIÓN (Real)
+        # =====================================================
+        # Leemos el entorno directamente del provider de la transacción
+        env_type = transaction.provider_id.bdv_environment.strip().lower() if transaction.provider_id.bdv_environment else 'qa'
+        
+        if env_type == 'qa':
+            # AMBIENTE DE CALIDAD: Monto fijo solicitado por el banco
+            importe_float = 120.00
+            _logger.info(f"[BDV] 🟢 Ambiente QA detectado (desde provider). Forzando monto a enviar: {importe_float} Bs")
+        else:
+            # AMBIENTE DE PRODUCCIÓN: Tomar el monto real que viene del e-commerce
+            # 1. Intentamos usar amount_ves si existe y es válido
+            importe_float = getattr(transaction, 'amount_ves', 0.0)
+            
+            # 2. Si amount_ves es 0, None o no existe, usamos el amount base de la transacción
+            if not importe_float or float(importe_float) <= 0:
+                importe_float = float(transaction.amount)
+                
+            _logger.info(f"[BDV] 🔵 Ambiente PRODUCCIÓN detectado (desde provider). Monto a enviar al banco: {importe_float} Bs (ID Transacción: {transaction.id})")
+        
+        # Formateamos a 2 decimales como string para el payload del banco
+        importe_str = f"{importe_float:.2f}"
+        # =====================================================
+        # =====================================================
 
-        # Actualizar la transacción con los datos del pagador
+        # Actualizar la transacción con los datos del pagador y el monto determinado
         transaction.write({
             'bdv_cedula_pagador': cedula,
             'bdv_telefono_pagador': telefono_pagador,
             'bdv_banco_origen': post.get('banco', '0102'),
             'bdv_referencia': post.get('referencia', ''),
             'bdv_fecha_pago': fields.Date.today(),
-            'bdv_importe': float(importe),
+            'bdv_importe': importe_float,  # ← Se usa el monto calculado con seguridad
         })
 
         # Llamar al método de conciliación (el que creamos en el modelo)
