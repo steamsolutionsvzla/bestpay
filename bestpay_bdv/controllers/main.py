@@ -255,6 +255,45 @@ class BestpayBDVController(http.Controller):
                 'status': 'error',
                 'message': 'Ocurrió un error inesperado al procesar el pago.'
             })
+    
+        # =====================================================
+    # 4. WEBHOOK: NOTIFICACIÓN DEL BANCO (Server-to-Server)
+    # =====================================================
+    @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST'], csrf=False)
+    def bdv_webhook_notify(self, **post):
+        """
+        Endpoint para recibir notificaciones automáticas del BDV sobre el estado de un pago.
+        """
+        try:
+            # Registrar TODO lo que nos envía el banco para auditoría y pruebas
+            raw_data = request.httprequest.data.decode('utf-8')
+            _logger.info("="*50)
+            _logger.info("[BDV WEBHOOK] Notificación recibida del Banco de Venezuela")
+            _logger.info(f"[BDV WEBHOOK] Headers: {dict(request.httprequest.headers)}")
+            _logger.info(f"[BDV WEBHOOK] Body (Raw): {raw_data}")
+            _logger.info(f"[BDV WEBHOOK] Form Data: {post}")
+            _logger.info("="*50)
+
+            # Aquí puedes agregar la lógica para buscar la transacción por referencia 
+            # y cambiar su estado a 'done' si el banco confirma el pago.
+            # Ejemplo básico de respuesta exitosa al banco:
+            
+            return Response(
+                json.dumps({"status": "success", "message": "Notificación recibida correctamente"}),
+                status=200,
+                content_type='application/json'
+            )
+
+        except Exception as e:
+            _logger.error(f"[BDV WEBHOOK] Error procesando notificación: {str(e)}", exc_info=True)
+            # Siempre devolver 200 al banco para que no siga reintentando, 
+            # aunque haya fallado nuestro procesamiento interno.
+            return Response(
+                json.dumps({"status": "error", "message": "Error interno, pero recibido"}),
+                status=200,
+                content_type='application/json'
+            )
+
         # =====================================================
     # MÉTODO AUXILIAR: GENERAR REFERENCIA SECUENCIAL
     # =====================================================
