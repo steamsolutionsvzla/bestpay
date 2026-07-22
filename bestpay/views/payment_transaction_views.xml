@@ -37,7 +37,7 @@
                         </group>
                         
                         <group name="api_logs_group">
-                            <group string="Logs de comunicación con 3ro" name="technical_logs">
+                            <group string="Logs de comunicación con el cliente" name="technical_logs">
                                 <label for="payment_request_payload" string="Payload de Solicitud API Original (JSON)"/>
                                 <field name="payment_request_payload" placeholder="JSON con el Request original del tercero..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
 
