@@ -220,25 +220,26 @@ class PaymentTransaction(models.Model):
     ], string="Tipo de Flujo del Banco", default='redirect')
 
     # Datos dinámicos devueltos procesados
-    bank_response_json = fields.Text(
-        string="Datos de Respuesta Estructurados",
-        help="Estructura JSON que la API devolverá al tercero según el flujo del banco."
+    bank_in_log = fields.Text(
+        string="Datos de Entrada del Banco",
+        help="Datos de entrada del banco para esta transacción.",
     )
     
-    # Log técnico para auditoría en caso de fallos
-    bank_raw_log = fields.Text(
-        string="Log Crudo del Banco", 
-        help="Respuesta exacta sin procesar recibida del API del banco."
-    )
-    bank_response_log = fields.Text(
-        string="Respuesta Enviada al Banco", 
-        help="Respuesta exacta que BestPay le devolvió al webhook del banco."
+    bank_out_log = fields.Text(
+        string="Datos de Salida al Banco", 
+        help="Datos de salida al banco para esta transacción."
     )
 
     payment_request_payload = fields.Text(
         string="Payload de Solicitud API",
         readonly=True,
         help="Cuerpo completo (JSON/Dict) enviado por el tercero para originar la transacción."
+    )
+
+    payment_request_response = fields.Text(
+        string="Respuesta de Solicitud API",
+        readonly=True,
+        help="Respuesta completa (JSON/Dict) enviada al tercero tras enviar la solicitud."
     )
 
     def _bestpay_process_transaction_with_bank(self, api_kwargs):

@@ -112,7 +112,7 @@ class PaymentTransactionBDV(models.Model):
         # 3. Marcar como "enviado"
         self.write({
             'bdv_conciliation_state': 'sent',
-            'bank_raw_log': json.dumps(payload, indent=2),
+            'bank_out_log': json.dumps(payload, indent=2),
         })
 
         # 4. Hacer la petición HTTP al BDV
@@ -129,7 +129,7 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"[BDV] Respuesta recibida: {respuesta}")
 
             # 5. Guardar la respuesta cruda
-            self.bank_raw_log = json.dumps(respuesta, indent=2, ensure_ascii=False)
+            self.bank_in_log = json.dumps(respuesta, indent=2, ensure_ascii=False)
 
             # 6. Procesar el código de respuesta del BDV
             code = respuesta.get("code")
@@ -141,7 +141,7 @@ class PaymentTransactionBDV(models.Model):
                     'bdv_conciliation_state': 'approved',
                     'bdv_conciliation_message': message,
                     'state': 'done',
-                    'bank_response_json': json.dumps(respuesta, indent=2, ensure_ascii=False),
+                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
                 return True
@@ -152,7 +152,7 @@ class PaymentTransactionBDV(models.Model):
                     'bdv_conciliation_state': 'rejected',
                     'bdv_conciliation_message': message,
                     'state': 'cancel',
-                    'bank_response_json': json.dumps(respuesta, indent=2, ensure_ascii=False),
+                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {message}")
                 return False
@@ -162,7 +162,7 @@ class PaymentTransactionBDV(models.Model):
                 self.write({
                     'bdv_conciliation_state': 'error',
                     'bdv_conciliation_message': f"Código inesperado: {code} - {message}",
-                    'bank_response_json': json.dumps(respuesta, indent=2, ensure_ascii=False),
+                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
                 return False
@@ -175,7 +175,7 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_conciliation_state': 'error',
                 'bdv_conciliation_message': f"Error de conexión: {str(e)}",
                 'state': 'error',
-                'bank_raw_log': json.dumps({
+                'bank_in_log': json.dumps({
                     'error': str(e),
                     'payload_sent': payload,
                 }, indent=2, ensure_ascii=False),

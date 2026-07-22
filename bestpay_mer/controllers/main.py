@@ -223,8 +223,8 @@ class BestPayWebhookController(http.Controller):
 
                 # Concatenar en caso de reintentos
                 tx.write({
-                    'bank_raw_log': (tx.bank_raw_log or '') + f"\n\n--- [REINTENTO DUPLICADO] ---\n{incoming_raw_json}",
-                    'bank_response_log': (tx.bank_response_log or '') + f"\n\n--- [RESPUESTA DUPLICADO] ---\n{outgoing_response_json}"
+                    'bank_in_log': (tx.bank_in_log or '') + f"\n\n--- [REINTENTO DUPLICADO] ---\n{incoming_raw_json}",
+                    'bank_out_log': (tx.bank_out_log or '') + f"\n\n--- [RESPUESTA DUPLICADO] ---\n{outgoing_response_json}"
                 })
 
                 return self._json_response(response, status=200)
@@ -244,8 +244,8 @@ class BestPayWebhookController(http.Controller):
             tx.write({
                 'acquirer_reference': webhook_info.get('referencia'),
                 'provider_reference': guid,
-                'bank_raw_log': incoming_raw_json,
-                'bank_response_log': outgoing_response_json,
+                'bank_in_log': incoming_raw_json,
+                'bank_out_log': outgoing_response_json,
             })
 
             # 6. Marcar Transacción como Exitosa

@@ -46,14 +46,14 @@
                                     widget="ace" 
                                     options="{'mode': 'javascript'}"/>
 
-                                <label for="bank_response_json" string="Datos de Respuesta Estructurados (JSON)"/>
-                                <field name="bank_response_json" placeholder="JSON formateado para el cliente..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
-                                
-                                <separator string="Logs de Comunicación weebhook con el Banco" class="mt-3" invisible="not bank_raw_log"/>
-                                <label for="bank_raw_log" string="Log Crudo del Banco" class="mt-3" invisible="not bank_raw_log"/>
-                                <field name="bank_raw_log" placeholder="Respuesta cruda del banco..." invisible="not bank_raw_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
-                                <label for="bank_response_log" string="Respuesta Enviada al Banco" class="mt-3" invisible="not bank_response_log"/>
-                                <field name="bank_response_log" placeholder="Respuesta enviada al banco..." invisible="not bank_response_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
+                                <label for="payment_request_response" string="Respuesta de Solicitud API (JSON)"/>
+                                <field name="payment_request_response" placeholder="JSON de respuesta al tercero..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
+
+                                <separator string="Logs de Comunicación con el Banco" class="mt-3" invisible="not bank_in_log or not bank_out_log"/>
+                                <label for="bank_in_log" string="Datos de entrada del Banco" class="mt-3" invisible="not bank_in_log"/>
+                                <field name="bank_in_log" invisible="not bank_in_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
+                                <label for="bank_out_log" string="Datos de Salida al Banco" class="mt-3" invisible="not bank_out_log"/>
+                                <field name="bank_out_log" invisible="not bank_out_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                             </group>
                         </group>
                     </page>
