@@ -148,6 +148,8 @@ class BestPayWebhookController(http.Controller):
             encrypted_data = tx._encrypt_transaction_data()
 
             custom_link = f"{mercantil_payment_url}/?merchantid={merchant_id}&transactiondata={encrypted_data}&integratorid={integrator_id}"
+
+            tx.write({'payment_link_bank_mer': custom_link})
             
             _logger.info("\n" + "="*80 + f"\n[BESTPAY MERCANTIL DEBUG] LINK GENERADO CON NUEVA TASA:\n{custom_link}\n" + "="*80)
             

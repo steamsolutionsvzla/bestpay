@@ -31,30 +31,26 @@
                                 <field name="external_reference" readonly="1"/>
                                 <field name="client_note" readonly="1"/>
                             </group>
-                            <group string="Respuesta y Flujo del Banco">
+                            <group string="Flujo y datos del Banco">
                                 <field name="bestpay_flow_type" readonly="1"/>
                             </group>
                         </group>
                         
-                        <group string="Logs Técnicos de Comunicación" name="technical_logs">
-                            <group colspan="2" col="1">
+                        <group name="api_logs_group">
+                            <group string="Logs de comunicación con 3ro" name="technical_logs">
                                 <label for="payment_request_payload" string="Payload de Solicitud API Original (JSON)"/>
-                                <field name="payment_request_payload" 
-                                    placeholder="JSON con el Request original del tercero..." 
-                                    readonly="1" 
-                                    nolabel="1"
-                                    widget="ace" 
-                                    options="{'mode': 'javascript'}"/>
+                                <field name="payment_request_payload" placeholder="JSON con el Request original del tercero..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
 
                                 <label for="payment_request_response" string="Respuesta de Solicitud API (JSON)"/>
                                 <field name="payment_request_response" placeholder="JSON de respuesta al tercero..." readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
 
-                                <separator string="Logs de Comunicación con el Banco" class="mt-3" invisible="not bank_in_log or not bank_out_log"/>
+                            </group>
+                            <group string="Logs de comunicación con el banco" invisible="not bank_in_log or not bank_out_log">
                                 <label for="bank_in_log" string="Datos de entrada del Banco" class="mt-3" invisible="not bank_in_log"/>
                                 <field name="bank_in_log" invisible="not bank_in_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                                 <label for="bank_out_log" string="Datos de Salida al Banco" class="mt-3" invisible="not bank_out_log"/>
                                 <field name="bank_out_log" invisible="not bank_out_log" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
-                            </group>
+                            </group>  
                         </group>
                     </page>
                 </notebook>

@@ -32,6 +32,18 @@ class PaymentTransaction(models.Model):
         help="Dirección de redirección final que el comercio 3ro provee en caliente para su pasarela."
     )
 
+    payment_link_client_mer = fields.Char(
+        string="Link de Pago para el Cliente",
+        help="Link de pago que se le envía al cliente final para que complete la transacción. Este link es generado internamente y es único para cada transacción.",
+        readonly=True
+    )
+
+    payment_link_bank_mer = fields.Char(
+        string="Link de boton de Pago Mercantil",
+        help="Link generado para redirigir al cliente final al endpoint del banco Mercantil.",
+        readonly=True
+    )
+
     # =========================================================================
     # ORQUESTADOR PRINCIPAL (ENTRADA DESDE LA API)
     # =========================================================================
@@ -64,7 +76,8 @@ class PaymentTransaction(models.Model):
                 'bestpay_flow_type': 'redirect',
                 'trx_type': trx_type,
                 'return_url_3ro': return_url_3ro,
-                'mercantil_payment_concepts': payment_concepts
+                'mercantil_payment_concepts': payment_concepts,
+                'payment_link_client_mer': redirect_url_odoo
             })
             
             # 4. Al tercero solo le devolvemos el link seguro de nuestro Odoo
