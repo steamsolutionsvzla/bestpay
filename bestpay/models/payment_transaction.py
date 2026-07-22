@@ -230,6 +230,10 @@ class PaymentTransaction(models.Model):
         string="Log Crudo del Banco", 
         help="Respuesta exacta sin procesar recibida del API del banco."
     )
+    bank_response_log = fields.Text(
+        string="Respuesta Enviada al Banco", 
+        help="Respuesta exacta que BestPay le devolvió al webhook del banco."
+    )
 
     payment_request_payload = fields.Text(
         string="Payload de Solicitud API",
