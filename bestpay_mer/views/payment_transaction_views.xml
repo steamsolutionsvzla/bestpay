@@ -6,9 +6,13 @@
         <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='bestpay_flow_type']" position="after">
+                <field name="payment_link_client_mer" widget="CopyClipboardURL" readonly="1" invisible="provider_code != 'mer'"/>
+                <field name="return_url_3ro" readonly="1" invisible="provider_code != 'mer'"/>
                 <field name="trx_type" invisible="provider_code != 'mer'"/>
                 <field name="mercantil_payment_concepts" readonly="1" invisible="provider_code != 'mer'"/>
-                <field name="return_url_3ro" readonly="1" invisible="provider_code != 'mer'"/>
+            </xpath>
+            <xpath expr="//field[@name='external_reference']" position="after">
+                <field name="payment_link_bank_mer" widget="CopyClipboardURL" readonly="1" invisible="provider_code != 'mer'"/>
             </xpath>
         </field>
     </record>
