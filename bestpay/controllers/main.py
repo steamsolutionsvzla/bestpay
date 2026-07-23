@@ -207,7 +207,7 @@ class BestPayApiController(http.Controller):
                 tx._set_error(error_msg)
             except Exception as tx_err:
                 # Respaldo por si _set_error falla debido a alguna restricción interna de Odoo
-                tx.write({'state': 'error', 'bank_raw_log': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
+                tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
             
             return {
                 'status': 'error', 
@@ -219,7 +219,7 @@ class BestPayApiController(http.Controller):
             try:
                 tx._set_error(datos_banco['error'])
             except Exception as tx_err:
-                tx.write({'state': 'error', 'bank_raw_log': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
+                tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
             
             return {
                 'status': 'error', 
