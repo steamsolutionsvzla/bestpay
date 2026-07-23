@@ -28,5 +28,23 @@
             <field name="number_next">1</field>
             <field name="number_increment">1</field>
         </record>
+
+                <!-- ========================================== -->
+        <!-- MÉTODO DE PAGO: BDV C2P CUENTAS MÚLTIPLES  -->
+        <!-- ========================================== -->
+        <record id="payment_method_bdv_c2p" model="payment.method">
+            <field name="name">BDV C2P Cuentas Múltiples</field>
+            <field name="code">bdv_c2p</field>
+            <field name="active" eval="True"/>
+            <field name="sequence">20</field>
+        </record>
+
+        <!-- Actualizar el Proveedor BDV existente para incluir el nuevo método -->
+        <!-- NOTA: Si este archivo está en el módulo 'bestpay_bdv', el ID del proveedor 
+             probablemente deba ser 'bestpay.payment_provider_bdv'. Ajusta el 'id' si es necesario. -->
+        <record id="payment_provider_bdv" model="payment.provider">
+            <field name="payment_method_ids" eval="[(4, ref('payment_method_bdv_c2p'))]"/>
+        </record>
+        
     </data>
 </odoo>

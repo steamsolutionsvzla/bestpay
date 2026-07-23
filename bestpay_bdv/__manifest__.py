@@ -1,6 +1,6 @@
 {
     'name': 'BestPay - Banco de Venezuela',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.0.1',
     'category': 'Accounting/Payment',
     'summary': 'Integración con Banco de Venezuela para BestPay',
     'author': 'Samuel Guillén',
@@ -14,6 +14,7 @@
         'views/res_partner_views.xml',
         'views/payment_provider_views.xml',
         'views/templates.xml',
+        'views/c2p_checkout_form.xml',
     ],
     'assets': {
         'web.assets_frontend': [

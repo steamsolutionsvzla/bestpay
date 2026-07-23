@@ -154,13 +154,9 @@ class BestpayBDVController(http.Controller):
     # =====================================================
     @http.route('/pago/bdv/checkout', type='http', auth='none', website=False)
     def bdv_checkout(self, hash=None, **kw):
-        """
-        Muestra el formulario de pago móvil usando el uuid_hash.
-        """
         if not hash:
             return request.not_found()
         
-        # Buscar por uuid_hash en lugar de ID
         transaction = request.env['payment.transaction'].sudo().search([
             ('uuid_hash', '=', hash)
         ], limit=1)
@@ -175,11 +171,21 @@ class BestpayBDVController(http.Controller):
                 'message': 'Este pago ya fue procesado exitosamente.'
             })
         
-        # Renderizar el formulario standalone
-        return request.render('bestpay_bdv.bdv_checkout_form', {
-            'transaction': transaction,
-            'hash': hash,
-        })
+        # --- NUEVA LÓGICA DE ENRUTAMIENTO ---
+        method_code = transaction.payment_method_id.code
+
+        if method_code == 'bdv_c2p':
+            # Renderiza el NUEVO formulario multi-paso para C2P
+            return request.render('bestpay_bdv.c2p_checkout_form', {
+                'transaction': transaction,
+                'hash': hash,
+            })
+        else:
+            # Renderiza el formulario VIEJO de Pago Móvil (intacto)
+            return request.render('bestpay_bdv.bdv_checkout_form', {
+                'transaction': transaction,
+                'hash': hash,
+            })
 
     # =====================================================
     # 3. WEB: PROCESAR EL PAGO (Envío al BDV)
@@ -314,7 +320,7 @@ class BestpayBDVController(http.Controller):
                 content_type='application/json'
             )
 
-        # =====================================================
+    # =====================================================
     # MÉTODO AUXILIAR: GENERAR REFERENCIA SECUENCIAL
     # =====================================================
     def _generate_bestpay_reference(self, external_ref):
@@ -349,3 +355,106 @@ class BestpayBDVController(http.Controller):
             _logger.error(f"[API] Fallback a timestamp: {seq_number}")
         
         return f"BP-{year}-{ext_clean}-{seq_number}"       
+
+     # =====================================================
+    # 5. API C2P: GENERAR OTP (Paso 1 del flujo multi-paso)
+    # =====================================================
+    @http.route('/api/bestpay/v1/c2p/generate_otp', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def c2p_generate_otp(self, uuid_hash=None, customer_document_id=None, customer_phone=None, customer_bank_code=None, **kw):
+        """
+        Recibe los datos iniciales del cliente y solicita el OTP al BDV.
+        """
+        _logger.info(f"🔍 DEBUG C2P OTP: uuid_hash recibido = '{uuid_hash}' (tipo: {type(uuid_hash)})")
+        
+        if not uuid_hash:
+            return {'success': False, 'error': 'Falta el identificador de la transacción (uuid_hash).'}
+
+        # --- NORMALIZACIÓN DEL TELÉFONO (Red de seguridad) ---
+        if customer_phone:
+            customer_phone = customer_phone.strip()
+            if not customer_phone.startswith('0'):
+                customer_phone = '0' + customer_phone
+        # -----------------------------------------------------
+
+        transaction = request.env['payment.transaction'].sudo().search([('uuid_hash', '=', uuid_hash)], limit=1)
+        
+        _logger.info(f"🔍 DEBUG C2P OTP: Transacción encontrada = {transaction.exists()}")
+        if transaction.exists():
+            _logger.info(f"🔍 DEBUG C2P OTP: Código del proveedor = '{transaction.provider_id.code}'")
+            
+        if not transaction.exists() or transaction.provider_id.code != 'bdv':
+            return {'success': False, 'error': 'Transacción no válida.'}
+
+        try:
+            # 1. Guardamos los datos iniciales en la transacción
+            transaction.write({
+                'bdv_c2p_customer_document_id': customer_document_id,
+                'bdv_c2p_customer_phone': customer_phone,
+                'bdv_c2p_customer_bank_code': customer_bank_code,
+                'bdv_c2p_status': 'processing'
+            })
+
+            # 2. Llamamos al método del modelo que ya creamos
+            result = transaction.bdv_c2p_generate_otp()
+            
+            return {
+                'success': True,
+                'message': result.get('message', 'OTP enviado correctamente. Revise su teléfono.'),
+                'status': transaction.bdv_c2p_status
+            }
+
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error(f"[BDV C2P OTP] Error inesperado: {str(e)}", exc_info=True)
+            return {'success': False, 'error': 'Error interno del servidor al generar OTP.'}
+
+    # =====================================================
+    # 6. API C2P: PROCESAR PAGO (Paso 2 del flujo multi-paso)
+    # =====================================================
+    @http.route('/api/bestpay/v1/c2p/process_payment', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def c2p_process_payment(self, uuid_hash=None, otp=None, **kw):
+        """
+        Recibe el OTP del cliente y ejecuta el cobro real en el BDV.
+        """
+        if not uuid_hash or not otp:
+            return {'success': False, 'error': 'Faltan datos obligatorios (uuid_hash u OTP).'}
+
+        transaction = request.env['payment.transaction'].sudo().search([('uuid_hash', '=', uuid_hash)], limit=1)
+        if not transaction.exists():
+            return {'success': False, 'error': 'Transacción no válida.'}
+
+        try:
+            # 1. Guardamos el OTP en la transacción
+            transaction.write({
+                'bdv_c2p_otp': otp,
+                'bdv_c2p_status': 'processing'
+            })
+
+            # 2. Llamamos al método del modelo que ejecuta el cobro
+            result = transaction.bdv_c2p_process_payment()
+            
+            if result.get('success'):
+                # Generamos la URL de éxito para que el frontend redirija o renderice
+                base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url')
+                success_url = f"{base_url}/pago/bdv/checkout?hash={uuid_hash}&status=success"
+                
+                return {
+                    'success': True,
+                    'message': 'Pago aprobado exitosamente.',
+                    'redirect_url': success_url,
+                    'end_to_end_id': transaction.bdv_c2p_end_to_end_id
+                }
+            else:
+                # Si falla, intentamos anular automáticamente para liberar al cliente (buena práctica)
+                transaction.bdv_c2p_annul()
+                return {
+                    'success': False,
+                    'error': result.get('message', 'El banco rechazó el pago.')
+                }
+
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error(f"[BDV C2P Process] Error inesperado: {str(e)}", exc_info=True)
+            return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}

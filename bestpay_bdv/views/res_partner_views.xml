@@ -14,17 +14,29 @@
                     <!-- Contenedor que se muestra SOLO si el BDV está en los providers permitidos -->
                     <div invisible="not allowed_provider_ids or %(bestpay_bdv.payment_provider_bdv)d not in allowed_provider_ids">
                         <group string="Credenciales del Banco de Venezuela">
-                            <group>
+                            
+                            <!-- GRUPO 1: Pago Móvil (Existente) -->
+                            <group string="Pago Móvil">
                                 <field name="bdv_api_key"
                                        password="True"
                                        placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
-                            </group>
-                            <group>
                                 <field name="bdv_telefono_destino"
                                        placeholder="04127141363"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
                             </group>
+
+                            <!-- GRUPO 2: C2P Cuentas Múltiples (NUEVO) -->
+                            <group string="C2P Cuentas Múltiples">
+                                <field name="bdv_api_key_c2p"
+                                       password="True"
+                                       placeholder="API Key específica para flujo C2P"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                <field name="bdv_phone_destino_c2p"
+                                       placeholder="Teléfono o Cuenta destino del comercio (C2P)"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+
                         </group>
                     </div>
 

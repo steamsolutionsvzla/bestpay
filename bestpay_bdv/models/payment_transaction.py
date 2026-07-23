@@ -68,6 +68,70 @@ class PaymentTransactionBDV(models.Model):
         help="Mensaje devuelto por el BDV en la última conciliación.",
     )
 
+    # ============================================
+    # CAMPOS ESPECÍFICOS C2P CUENTAS MÚLTIPLES
+    # ============================================
+    
+    bdv_c2p_customer_document_id = fields.Char(
+        string="Cédula Cliente (C2P)",
+        help="Documento de identidad del cliente pagador (ej: V12345678)"
+    )
+    
+    bdv_c2p_customer_phone = fields.Char(
+        string="Teléfono Cliente (C2P)",
+        help="Número de teléfono del cliente (instrumento de pago)"
+    )
+    
+    bdv_c2p_customer_bank_code = fields.Char(
+        string="Código Banco Cliente (C2P)",
+        help="Código del banco del cliente (ej: 0102 para Venezuela)"
+    )
+    
+    bdv_c2p_otp = fields.Char(
+        string="OTP (C2P)",
+        groups="base.group_system",
+        help="Código OTP generado por el banco (solo visible para administradores)"
+    )
+    
+    bdv_c2p_end_to_end_id = fields.Char(
+        string="EndToEnd ID (C2P)",
+        readonly=True,
+        help="Identificador único de la transacción devuelto por el BDV"
+    )
+    
+    bdv_c2p_reference_generated = fields.Char(
+        string="Referencia Generada (C2P)",
+        readonly=True,
+        help="Número de referencia generado por el banco"
+    )
+    
+    bdv_c2p_status = fields.Selection([
+        ('pending', 'Pendiente'),
+        ('otp_sent', 'OTP Enviado'),
+        ('processing', 'Procesando'),
+        ('done', 'Completado'),
+        ('error', 'Error'),
+        ('annulled', 'Anulado'),
+    ], string="Estado C2P", default='pending',
+       help="Estado actual del flujo multi-paso C2P")
+    
+    bdv_c2p_coin_type = fields.Char(
+        string="Tipo de Moneda (C2P)",
+        default='VES',
+        help="Moneda de la transacción (VES, USD, etc.)"
+    )
+    
+    bdv_c2p_operation_type = fields.Char(
+        string="Tipo de Operación (C2P)",
+        default='CELE',
+        help="Tipo de operación (CELE=pago, REV=reversa)"
+    )
+    
+    bdv_c2p_concept = fields.Char(
+        string="Concepto (C2P)",
+        help="Descripción del pago (concepto)"
+    )
+
     def bdv_send_conciliation(self):
         """
         Envía los datos del pago móvil al BDV para conciliación.
@@ -242,3 +306,133 @@ class PaymentTransactionBDV(models.Model):
             'uuid_hash': self.uuid_hash,
             'flow_type': 'redirect',
         }
+
+    # =========================================================================
+    # MÉTODOS API C2P CUENTAS MÚLTIPLES (BDV)
+    # =========================================================================
+
+    def _bdv_get_base_url(self):
+        """Obtiene la URL base del proveedor, eliminando el endpoint específico de Pago Móvil."""
+        self.ensure_one()
+        url = self.provider_id.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444'
+        # Limpia la URL para dejar solo el host y puerto base
+        return url.replace('/getMovement/v2', '').replace('/getMovement', '').rstrip('/')
+
+    def _bdv_get_c2p_headers(self):
+        """Construye los headers necesarios para las peticiones C2P."""
+        self.ensure_one()
+        # Lee la API Key específica de C2P del partner (comercio)
+        api_key = getattr(self.partner_id, 'bdv_api_key_c2p', '')
+        if not api_key:
+            _logger.error(f"BDV C2P: Falta bdv_api_key_c2p en el partner {self.partner_id.name}")
+            raise UserError("Error de configuración: Falta la API Key de C2P en los datos del comercio.")
+        
+        return {
+            "X-API-Key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+    def bdv_c2p_generate_otp(self):
+        """Paso 1: Solicita al BDV el envío del OTP al cliente."""
+        self.ensure_one()
+        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/paymentkey/v2"
+        payload = {
+            "customerDocumentId": self.bdv_c2p_customer_document_id
+        }
+        
+        _logger.info(f"BDV C2P OTP Request: {url} | Payload: {payload}")
+        response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
+        data = response.json()
+        _logger.info(f"BDV C2P OTP Response: {data}")
+
+        if data.get('code') == '1000':
+            self.write({'bdv_c2p_status': 'otp_sent'})
+            return {'success': True, 'message': data.get('message', 'OTP generado correctamente')}
+        
+        self.write({'bdv_c2p_status': 'error', 'state_message': data.get('message')})
+        raise UserError(f"Error generando OTP: {data.get('message')}")
+
+    def bdv_c2p_process_payment(self):
+        """Paso 2: Procesa el cobro real utilizando el OTP proporcionado."""
+        self.ensure_one()
+        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/process/v2"
+        
+        phone_destino = getattr(self.partner_id, 'bdv_phone_destino_c2p', '')
+        if not phone_destino:
+            raise UserError("Falta configurar el 'bdv_phone_destino_c2p' en el contacto del comercio.")
+
+        # =====================================================
+        # LÓGICA DE QA vs PRODUCCIÓN (Monto y Concepto)
+        # =====================================================
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
+        
+        if env_type == 'qa':
+            amount_str = "1000.6"
+            concept_str = "Pago"  # <-- EXACTO como lo pide la documentación Dummy
+            _logger.info(f"[BDV C2P] 🟢 Ambiente QA detectado. Forzando monto: {amount_str} Bs y concepto: '{concept_str}'")
+        else:
+            amount_float = getattr(self, 'amount_ves', 0.0)
+            if not amount_float or float(amount_float) <= 0:
+                amount_float = float(self.amount)
+            amount_str = f"{amount_float:.2f}"
+            concept_str = self.bdv_c2p_concept or f"Pago BestPay Ref: {self.reference}"
+            _logger.info(f"[BDV C2P] 🔵 Ambiente PRODUCCIÓN. Monto: {amount_str} Bs")
+
+        payload = {
+            "customerDocumentId": self.bdv_c2p_customer_document_id,
+            "customerNumberInstrument": self.bdv_c2p_customer_phone,
+            "amount": amount_str,
+            "customerBankCode": self.bdv_c2p_customer_bank_code,
+            "concept": concept_str,  # <-- Usamos la variable controlada
+            "otp": self.bdv_c2p_otp,
+            "coinType": self.bdv_c2p_coin_type or "VES",
+            "operationType": self.bdv_c2p_operation_type or "CELE",
+            "commerceNumberInstrument": phone_destino
+        }
+        
+        _logger.info(f"BDV C2P Process Request: {url} | Payload: {payload}")
+        response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=20)
+        data = response.json()
+        _logger.info(f"BDV C2P Process Response: {data}")
+
+        if data.get('code') == '1000' and data.get('data'):
+            response_data = data['data']
+            self.write({
+                'bdv_c2p_status': 'done',
+                'bdv_c2p_end_to_end_id': response_data.get('endToEndId'),
+                'bdv_c2p_reference_generated': response_data.get('referencia'),
+                'state': 'done',
+                'state_message': 'Pago C2P aprobado por el BDV'
+            })
+            return {'success': True, 'data': response_data}
+        
+        self.write({
+            'bdv_c2p_status': 'error',
+            'state': 'error',
+            'state_message': data.get('message', 'Error desconocido en el proceso de cobro')
+        })
+        return {'success': False, 'message': data.get('message')}
+
+    def bdv_c2p_annul(self):
+        """Paso 3: Anula la transacción en caso de error posterior o reversión."""
+        self.ensure_one()
+        if not self.bdv_c2p_end_to_end_id:
+            _logger.warning("BDV C2P Annul: No hay endToEndId para anular.")
+            return False
+            
+        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/annulment/v2"
+        payload = {
+            "endToEndId": self.bdv_c2p_end_to_end_id,
+            "referenceOrigin": None # O self.reference si el banco lo exige
+        }
+        
+        _logger.info(f"BDV C2P Annul Request: {url} | Payload: {payload}")
+        response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
+        data = response.json()
+        _logger.info(f"BDV C2P Annul Response: {data}")
+
+        if data.get('code') == '1000':
+            self.write({'bdv_c2p_status': 'annulled', 'state': 'cancel'})
+            return True
+        return False

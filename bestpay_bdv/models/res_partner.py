@@ -28,3 +28,15 @@ class ResPartnerBDV(models.Model):
         help="Número de teléfono al que este comercio recibe los pagos móviles (formato: 04XXXXXXXXX).",
         copy=False,
     )
+
+    # C2P
+
+    bdv_api_key_c2p = fields.Char(
+        string="API Key C2P BDV",
+        help="API Key específica para el flujo C2P del Banco de Venezuela"
+    )
+    
+    bdv_phone_destino_c2p = fields.Char(
+        string="Teléfono/Cuenta Destino C2P",
+        help="Número de teléfono o cuenta destino del comercio para recibir pagos C2P"
+    )

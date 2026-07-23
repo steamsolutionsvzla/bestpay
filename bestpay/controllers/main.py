@@ -89,10 +89,14 @@ class BestPayApiController(http.Controller):
         
         # Intento 1: Si el tercero envió un método específico, lo buscamos y verificamos que pertenezca al proveedor
         if method_code:
+            _logger.info(f"🔍 DEBUG: Buscando método '{method_code}' para proveedor ID: {provider.id if provider else 'NO HAY PROVEEDOR'}")
+            
             payment_method = request.env['payment.method'].sudo().search([
                 ('code', '=', str(method_code).lower()),
                 ('provider_ids', 'in', provider.id)
             ], limit=1)
+            
+            _logger.info(f"🔍 DEBUG: Resultado de la búsqueda: {payment_method}")
 
          # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
         if not payment_method:
