@@ -287,6 +287,41 @@
                                             </p>
                                         </div>
 
+                                        <!-- ====== DATOS DEL PAGADOR (solo C2P y solo en pago exitoso) ====== -->
+                                        <t t-if="transaction.bdv_c2p_customer_document_id and status == 'success'">
+                                            <t t-set="c2p_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
+                                            <div class="bg-light rounded p-3 mb-4 text-start">
+                                                <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Cédula:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_document_id"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Teléfono:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_phone"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Banco:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="c2p_banks.get(transaction.bdv_c2p_customer_bank_code) or transaction.bdv_c2p_customer_bank_code"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Monto:</strong></div>
+                                                    <div class="col-7 text-end">
+                                                        <t t-if="transaction.amount_ves">
+                                                            <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs
+                                                        </t>
+                                                        <t t-else="">
+                                                            <t t-esc="'%.2f' % transaction.amount"/> <t t-esc="transaction.currency_id.name"/>
+                                                        </t>
+                                                    </div>
+                                                </div>
+                                                <div class="row">
+                                                    <div class="col-5"><strong>Fecha:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div>
+                                                </div>
+                                            </div>
+                                        </t>
+
                                         <div class="d-grid gap-2">
                                             <a href="about:blank" class="btn btn-primary btn-lg">
                                                 <i class="fa fa-arrow-left me-2"></i> Volver al Comercio
