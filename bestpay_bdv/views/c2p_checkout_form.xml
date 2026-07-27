@@ -6,15 +6,31 @@
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
                 <title>Pago Seguro C2P - BestPay</title>
-                <!-- Bootstrap 5 desde CDN -->
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
-                <!-- Font Awesome para iconos -->
                 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"/>
                 <style>
                     body {
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                         min-height: 100vh;
                         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    }
+                    .step-indicator-float {
+                        position: fixed;
+                        left: 50px;
+                        top: 50%;
+                        transform: translateY(-50%);
+                        z-index: 1000;
+                        width: 280px;
+                    }
+                    @media (max-width: 1200px) {
+                        .step-indicator-float {
+                            position: relative;
+                            left: auto;
+                            top: auto;
+                            transform: none;
+                            width: 100%;
+                            margin-bottom: 20px;
+                        }
                     }
                     .payment-card {
                         border: none;
@@ -71,28 +87,32 @@
                         border-color: #0033a0;
                         box-shadow: 0 0 0 0.2rem rgba(0,51,160,0.15);
                     }
-                    .badge-reference {
-                        background: #e7f3ff;
-                        color: #0033a0;
-                        padding: 8px 15px;
-                        border-radius: 20px;
-                        font-weight: 600;
-                    }
                     .hidden { display: none; }
                     .error-msg { color: #d32f2f; background: #ffebee; padding: 0.75rem; border-radius: 10px; margin-bottom: 1rem; font-size: 0.9rem; border: 1px solid #f5c6cb; }
-                    .success-msg { color: #2e7d32; background: #e8f5e9; padding: 0.75rem; border-radius: 10px; margin-bottom: 1rem; font-size: 0.9rem; border: 1px solid #c3e6cb; }
                     .info-box { background: #e3f2fd; padding: 1rem; border-radius: 10px; margin-bottom: 1.5rem; font-size: 0.9rem; color: #0d47a1; border: 1px solid #b3d7ff; }
                 </style>
             </head>
             <body>
-                <!-- Variable oculta para pasar el hash al JavaScript -->
                 <div id="tx-data" t-att-data-hash="hash" style="display: none;"></div>
 
                 <div class="container py-5">
                     <div class="row justify-content-center">
                         <div class="col-md-8 col-lg-6">
+                            
+                            <!-- Indicador flotante a la izquierda -->
+                            <div class="step-indicator-float">
+                                <div class="d-flex align-items-center" style="background: rgba(255,255,255,0.15); border-radius: 15px; padding: 20px; backdrop-filter: blur(10px);">
+                                    <div id="step-number-display" style="background: white; color: #0033a0; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.3rem; margin-right: 15px; flex-shrink: 0;">1</div>
+                                    <div>
+                                        <div id="step-title-display" style="font-size: 1.3rem; font-weight: 700; color: white; margin-bottom: 5px;">Identifícate</div>
+                                        <div id="step-subtitle-display" style="font-size: 0.9rem; color: rgba(255,255,255,0.9);">Siguiente paso: Verifica tu operación</div>
+                                        <div id="step-counter-display" style="font-size: 0.85rem; color: rgba(255,255,255,0.75); margin-top: 5px;">1 de 2</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Formulario centrado -->
                             <div class="card payment-card">
-                                <!-- Encabezado -->
                                 <div class="card-header card-header-bdv text-center py-4">
                                     <h3 class="mb-1">
                                         <i class="fa fa-shield me-2"></i> Pasarela de Pago Seguro C2P
@@ -101,7 +121,6 @@
                                 </div>
                                 
                                 <div class="card-body p-4 p-md-5">
-                                    <!-- Resumen del Monto (Idéntico al de Pago Móvil) -->
                                     <div class="amount-box p-4 text-center mb-4">
                                         <p class="text-muted small text-uppercase fw-bold mb-1">Monto a Cancelar</p>
                                         <h2 class="amount-value mb-2">
@@ -117,21 +136,21 @@
                                         <t t-if="transaction.exchange_rate_bcv">
                                             <p class="text-muted small mb-0 mt-1">
                                                 <i class="fa fa-info-circle me-1"></i>
-                                                Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$
+                                                Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$ 
+                                                <span class="mx-2">/</span>
+                                                Precio: $<t t-esc="'%.2f' % (transaction.amount_ves / transaction.exchange_rate_bcv if transaction.exchange_rate_bcv else transaction.amount)"/>
                                             </p>
-                                        </t>
+                                        </t>        
                                         <div class="mt-2">
-                                            <span class="badge-reference">
-                                                <i class="fa fa-file-invoice me-1"></i>
-                                                Ref: <t t-esc="transaction.external_reference or 'N/A'"/>
-                                            </span>
+                                            <div style="font-size: 0.85rem; color: #6c757d; font-weight: 500;">
+                                                <t t-esc="transaction.reference or ''"/>
+                                            </div>
                                         </div>
                                     </div>
 
                                     <div id="error-container" class="error-msg hidden"></div>
                                     <div id="success-container" class="success-msg hidden"></div>
 
-                                    <!-- PASO 1: Datos del Cliente -->
                                     <form id="step1-form">
                                         <h5 class="text-muted mb-3 fw-bold">
                                             <i class="fa fa-user me-2"></i> Datos del Pagador
@@ -175,12 +194,11 @@
 
                                         <div class="d-grid gap-2 mt-4">
                                             <button type="submit" class="btn btn-bdv btn-lg" id="btn-generate-otp">
-                                                <i class="fa fa-mobile-alt me-2"></i> Generar OTP
+                                                <i class="fa fa-arrow-right me-2"></i> Continuar
                                             </button>
                                         </div>
                                     </form>
 
-                                    <!-- PASO 2: Ingreso del OTP (Oculto inicialmente) -->
                                     <form id="step2-form" class="hidden">
                                         <div class="info-box text-center">
                                             <i class="fa fa-envelope-open-text fa-2x mb-2 d-block"></i>
@@ -213,24 +231,36 @@
                     </div>
                 </div>
 
-                <!-- Bootstrap JS -->
                 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
                 
-                <script type="text/javascript">
+                                <script type="text/javascript">
                     var uuidHash = document.getElementById('tx-data').getAttribute('data-hash');
                     var errorContainer = document.getElementById('error-container');
-                    var successContainer = document.getElementById('success-container');
+                    var currentStep = 1;
 
                     function showError(msg) {
-                        errorContainer.textContent = msg;
-                        errorContainer.classList.remove('hidden');
-                        successContainer.classList.add('hidden');
+                        if (errorContainer) {
+                            errorContainer.textContent = msg;
+                            errorContainer.classList.remove('hidden');
+                        }
                     }
 
-                    function showSuccess(msg) {
-                        successContainer.textContent = msg;
-                        successContainer.classList.remove('hidden');
-                        errorContainer.classList.add('hidden');
+                    function updateStepIndicator(step) {
+                        var stepNumber = document.getElementById('step-number-display');
+                        var stepTitle = document.getElementById('step-title-display');
+                        var stepSubtitle = document.getElementById('step-subtitle-display');
+                        var stepCounter = document.getElementById('step-counter-display');
+                        if (step === 1) {
+                            if (stepNumber) stepNumber.textContent = '1';
+                            if (stepTitle) stepTitle.textContent = 'Identifícate';
+                            if (stepSubtitle) stepSubtitle.textContent = 'Siguiente paso: Verifica tu operación';
+                            if (stepCounter) stepCounter.textContent = '1 de 2';
+                        } else if (step === 2) {
+                            if (stepNumber) stepNumber.textContent = '2';
+                            if (stepTitle) stepTitle.textContent = 'Ingresa tu clave de pago';
+                            if (stepSubtitle) stepSubtitle.textContent = 'Ultimo paso: Confirma tu pago';
+                            if (stepCounter) stepCounter.textContent = '2 de 2';
+                        }
                     }
 
                     document.addEventListener('DOMContentLoaded', function() {
@@ -242,18 +272,16 @@
                             step1Form.addEventListener('submit', async function(e) {
                                 e.preventDefault();
                                 var btn = document.getElementById('btn-generate-otp');
-                                btn.disabled = true;
-                                btn.innerHTML = '<i class="fa fa-spinner fa-spin me-2"></i> Generando...';
-                                errorContainer.classList.add('hidden');
+                                if (btn) {
+                                    btn.disabled = true;
+                                    btn.innerHTML = '&lt;i class="fa fa-spinner fa-spin me-2"&gt;&lt;/i&gt; Procesando...';
+                                }
+                                if (errorContainer) errorContainer.classList.add('hidden');
 
-                                // 1. Construir la Cédula completa (Ej: V12345678)
                                 var docType = document.getElementById('customer_doc_type').value;
                                 var docNumber = document.getElementById('customer_doc_number').value;
                                 var fullDocId = docType + docNumber;
-
-                                // 2. Construir el Teléfono completo (Ej: 04125692243)
                                 var rawPhone = document.getElementById('customer_phone').value.trim();
-                                // Si el usuario no puso el 0, se lo agregamos. Si ya lo puso, lo dejamos.
                                 var fullPhone = rawPhone.startsWith('0') ? rawPhone : '0' + rawPhone;
 
                                 var payload = {
@@ -261,8 +289,8 @@
                                     method: "call",
                                     params: {
                                         uuid_hash: uuidHash,
-                                        customer_document_id: fullDocId,           
-                                        customer_phone: fullPhone,                 
+                                        customer_document_id: fullDocId,
+                                        customer_phone: fullPhone,
                                         customer_bank_code: document.getElementById('customer_bank_code').value
                                     }
                                 };
@@ -276,18 +304,31 @@
                                     var data = await response.json();
 
                                     if (data.result &amp;&amp; data.result.success) {
-                                        showSuccess(data.result.message || "OTP generado. Revise su teléfono.");
-                                        step1Form.classList.add('hidden');
-                                        step2Form.classList.remove('hidden');
+                                        if (step1Form) step1Form.classList.add('hidden');
+                                        if (step2Form) step2Form.classList.remove('hidden');
+                                        currentStep = 2;
+                                        updateStepIndicator(currentStep);
+                                        if (btn) {
+                                            btn.disabled = false;
+                                            btn.innerHTML = '&lt;i class="fa fa-arrow-right me-2"&gt;&lt;/i&gt; Continuar';
+                                        }
                                     } else {
-                                        showError(data.result ? data.result.error : "Error de conexión con el servidor.");
-                                        btn.disabled = false;
-                                        btn.innerHTML = '<i class="fa fa-mobile-alt me-2"></i> Generar OTP';
+                                        var errMsg = "Error de conexion con el servidor.";
+                                        if (data.result &amp;&amp; data.result.error) {
+                                            errMsg = data.result.error;
+                                        }
+                                        showError(errMsg);
+                                        if (btn) {
+                                            btn.disabled = false;
+                                            btn.innerHTML = '&lt;i class="fa fa-arrow-right me-2"&gt;&lt;/i&gt; Continuar';
+                                        }
                                     }
                                 } catch (err) {
                                     showError("Error de red. Intente nuevamente.");
-                                    btn.disabled = false;
-                                    btn.innerHTML = '<i class="fa fa-mobile-alt me-2"></i> Generar OTP';
+                                    if (btn) {
+                                        btn.disabled = false;
+                                        btn.innerHTML = '&lt;i class="fa fa-arrow-right me-2"&gt;&lt;/i&gt; Continuar';
+                                    }
                                 }
                             });
                         }
@@ -296,9 +337,11 @@
                             step2Form.addEventListener('submit', async function(e) {
                                 e.preventDefault();
                                 var btn = document.getElementById('btn-process-payment');
-                                btn.disabled = true;
-                                btn.innerHTML = '<i class="fa fa-spinner fa-spin me-2"></i> Procesando pago...';
-                                errorContainer.classList.add('hidden');
+                                if (btn) {
+                                    btn.disabled = true;
+                                    btn.innerHTML = '&lt;i class="fa fa-spinner fa-spin me-2"&gt;&lt;/i&gt; Procesando pago...';
+                                }
+                                if (errorContainer) errorContainer.classList.add('hidden');
 
                                 var payload = {
                                     jsonrpc: "2.0",
@@ -318,32 +361,42 @@
                                     var data = await response.json();
 
                                     if (data.result &amp;&amp; data.result.success) {
-                                        showSuccess("¡Pago aprobado exitosamente!");
-                                        setTimeout(function() {
+                                        if (data.result.redirect_url) {
                                             window.location.href = data.result.redirect_url;
-                                        }, 2000);
+                                        }
                                     } else {
-                                        showError(data.result ? data.result.error : "El banco rechazó el pago.");
-                                        btn.disabled = false;
-                                        btn.innerHTML = '<i class="fa fa-lock me-2"></i> Confirmar y Pagar';
+                                        var errMsg = "El banco rechazo el pago.";
+                                        if (data.result &amp;&amp; data.result.error) {
+                                            errMsg = data.result.error;
+                                        }
+                                        showError(errMsg);
+                                        if (btn) {
+                                            btn.disabled = false;
+                                            btn.innerHTML = '&lt;i class="fa fa-lock me-2"&gt;&lt;/i&gt; Confirmar y Pagar';
+                                        }
                                     }
                                 } catch (err) {
                                     showError("Error de red. Intente nuevamente.");
-                                    btn.disabled = false;
-                                    btn.innerHTML = '<i class="fa fa-lock me-2"></i> Confirmar y Pagar';
+                                    if (btn) {
+                                        btn.disabled = false;
+                                        btn.innerHTML = '&lt;i class="fa fa-lock me-2"&gt;&lt;/i&gt; Confirmar y Pagar';
+                                    }
                                 }
                             });
                         }
 
                         if (btnBack) {
                             btnBack.addEventListener('click', function() {
-                                step2Form.classList.add('hidden');
-                                step1Form.classList.remove('hidden');
-                                errorContainer.classList.add('hidden');
-                                successContainer.classList.add('hidden');
+                                if (step2Form) step2Form.classList.add('hidden');
+                                if (step1Form) step1Form.classList.remove('hidden');
+                                if (errorContainer) errorContainer.classList.add('hidden');
                                 var btn = document.getElementById('btn-generate-otp');
-                                btn.disabled = false;
-                                btn.innerHTML = '<i class="fa fa-mobile-alt me-2"></i> Generar OTP';
+                                if (btn) {
+                                    btn.disabled = false;
+                                    btn.innerHTML = '&lt;i class="fa fa-arrow-right me-2"&gt;&lt;/i&gt; Continuar';
+                                }
+                                currentStep = 1;
+                                updateStepIndicator(currentStep);
                             });
                         }
                     });

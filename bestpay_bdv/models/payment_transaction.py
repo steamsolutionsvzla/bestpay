@@ -132,6 +132,14 @@ class PaymentTransactionBDV(models.Model):
         help="Descripción del pago (concepto)"
     )
 
+    # CAMPOS PARA DESBLOQUEAR LA BASE DE DATOS (Deben estar dentro de la clase)
+    c2p_otp_request_log = fields.Text(string="C2P OTP Request", readonly=True)
+    c2p_otp_response_log = fields.Text(string="C2P OTP Response", readonly=True)
+    c2p_payment_request_log = fields.Text(string="C2P Payment Request", readonly=True)
+    c2p_payment_response_log = fields.Text(string="C2P Payment Response", readonly=True)
+    c2p_annulment_request_log = fields.Text(string="C2P Annulment Request", readonly=True)
+    c2p_annulment_response_log = fields.Text(string="C2P Annulment Response", readonly=True)
+
     def bdv_send_conciliation(self):
         """
         Envía los datos del pago móvil al BDV para conciliación.
