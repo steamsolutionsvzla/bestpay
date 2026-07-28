@@ -109,18 +109,18 @@
                                                 <t t-esc="transaction.currency_id.name"/>
                                             </t>
                                         </h2>
-                                        <!-- Tasa aplicada para transparencia -->
                                         <t t-if="transaction.exchange_rate_bcv">
                                             <p class="text-muted small mb-0 mt-1">
                                                 <i class="fa fa-info-circle me-1"></i>
-                                                Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$
+                                                Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$ 
+                                                <span class="mx-2">/</span>
+                                                Precio: $<t t-esc="'%.2f' % (transaction.amount_ves / transaction.exchange_rate_bcv if transaction.exchange_rate_bcv else transaction.amount)"/>
                                             </p>
                                         </t>
                                             <div class="mt-2">
-                                                <span class="badge-reference">
-                                                    <i class="fa fa-file-invoice me-1"></i>
+                                                <div style="font-size: 0.85rem; color: #6c757d; font-weight: 500;">
                                                     Ref: <t t-esc="transaction.external_reference or 'N/A'"/>
-                                                </span>
+                                                </div>
                                             </div>
                                     </div>
 
@@ -318,6 +318,38 @@
                                                 <div class="row">
                                                     <div class="col-5"><strong>Fecha:</strong></div>
                                                     <div class="col-7 text-end"><t t-esc="transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div>
+                                                </div>
+                                            </div>
+                                        </t>
+
+                                                                                <!-- ====== DATOS DEL PAGADOR (solo Pago Móvil y solo en pago exitoso) ====== -->
+                                        <t t-if="transaction.bdv_cedula_pagador and status == 'success'">
+                                            <t t-set="pm_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
+                                            <div class="bg-light rounded p-3 mb-4 text-start">
+                                                <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Cédula:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_cedula_pagador"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Teléfono:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_telefono_pagador"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Banco:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="pm_banks.get(transaction.bdv_banco_origen) or transaction.bdv_banco_origen or 'N/A'"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Referencia:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_referencia or transaction.external_reference or 'N/A'"/></div>
+                                                </div>
+                                                <div class="row mb-1">
+                                                    <div class="col-5"><strong>Monto:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="'{:,.2f}'.format(transaction.bdv_importe or 0).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs</div>
+                                                </div>
+                                                <div class="row">
+                                                    <div class="col-5"><strong>Fecha:</strong></div>
+                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_fecha_pago and transaction.bdv_fecha_pago.strftime('%d/%m/%Y') or transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div>
                                                 </div>
                                             </div>
                                         </t>
