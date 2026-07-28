@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_form_inherit_bestpay_mercantil" model="ir.ui.view">
+        <field name="name">res.partner.form.inherit.bestpay.mercantil</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='bestpay_api']" position="after">
+                <page string="API Mercantil (BestPay)" 
+                      invisible="not is_api_client">
+                    
+                    <div invisible="not allowed_provider_ids or %(bestpay_mer.payment_provider_mercantil)d not in allowed_provider_ids">
+                        <group string="Credenciales del Botón de Pago">
+                            <group>
+                                <field name="mercantil_merchant_id" placeholder="Ej. 123456" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
+                                <field name="mercantil_integrator_id" placeholder="Ej. 789" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
+                                <field name="mercantil_secret_key" password="True" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+                            <group>
+                                <field name="mercantil_payment_url" placeholder="https://getway.mercantilbanco.com/..."/>
+                                <field name="mercantil_payment_concepts"/>
+                            </group>
+                        </group>
+                        <group string="URLs de Redirección y Notificación (Tercero)">
+                            <group>
+                                <field name="default_return_url_3ro" placeholder="https://ecommerce.com/order/success"/>
+                            </group>
+                            <group>
+                                <field name="webhook_url_3ro" placeholder="https://api.ecommerce.com/v1/webhook/bestpay"/>
+                            </group>
+                        </group>
+                    </div>
+                    <div invisible="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids">
+                        <p class="text-muted text-center py-3">
+                            ⚠️ Seleccione "Mercantil" en la lista de métodos de pago permitidos para habilitar sus campos de configuración.
+                        </p>
+                    </div>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

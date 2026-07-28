@@ -1,0 +1,33 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* bestpay_mer
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 19.0-20251121\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-01-27 18:56+0000\n"
+"PO-Revision-Date: 2026-01-27 14:57-0400\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Poedit 3.8\n"
+
+#. module: bestpay_mer
+#: model_terms:ir.ui.view,arch_db:bestpay_mer.payment_processing_page
+msgid "We’ll notify you by email once the transaction is complete."
+msgstr "Te notificaremos por correo una vez que la transacción esté completa."
+
+#. module: bestpay_mer
+#: model_terms:ir.ui.view,arch_db:bestpay_mer.payment_processing_page
+msgid "You can safely close this window."
+msgstr "Puede cerrar esta ventana con total seguridad."
+
+#. module: bestpay_mer
+#: model_terms:ir.ui.view,arch_db:bestpay_mer.payment_processing_page
+msgid "Your payment is processing"
+msgstr "Su pago está siendo procesado"
