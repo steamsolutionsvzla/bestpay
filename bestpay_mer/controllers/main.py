@@ -160,7 +160,7 @@ class BestPayWebhookController(http.Controller):
             _logger.error("[BESTPAY MERCANTIL API] Error generando link: %s", str(e))
             return request.make_response("Error interno al inicializar el cifrado seguro.", status=500)
 
-    @http.route('/v1/webhooks/mercantil/payment/confirmation', type='http', auth='public', methods=['POST'], csrf=False)
+    @http.route('/api/v1/webhooks/mercantil/payment/confirmation', type='http', auth='public', methods=['POST'], csrf=False)
     def mercantil_confirm_payment(self, **kwargs):
         raw_data = request.httprequest.data
         try:
