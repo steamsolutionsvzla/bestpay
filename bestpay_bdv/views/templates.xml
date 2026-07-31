@@ -117,11 +117,6 @@
                                                 Precio: $<t t-esc="'%.2f' % (transaction.amount_ves / transaction.exchange_rate_bcv if transaction.exchange_rate_bcv else transaction.amount)"/>
                                             </p>
                                         </t>
-                                            <div class="mt-2">
-                                                <div style="font-size: 0.85rem; color: #6c757d; font-weight: 500;">
-                                                    Ref: <t t-esc="transaction.external_reference or 'N/A'"/>
-                                                </div>
-                                            </div>
                                     </div>
 
                                         <!-- Formulario de Pago Móvil -->
@@ -257,6 +252,29 @@
                         }
                         .success-icon { color: #28a745; }
                         .error-icon { color: #dc3545; }
+
+                        .bp-ref-wrapper{
+                            position: relative;
+                            display: inline-block;
+                        }
+                        .bp-copy-icon{
+                            position: absolute;
+                            left: 100%;
+                            top: 50%;
+                            transform: translateY(-50%);
+                            margin-left: 10px;
+                            display: inline-flex; align-items: center; justify-content: center;
+                            width: 30px; height: 30px;
+                            border: 1.5px solid #0033a0; border-radius: 8px;
+                            background: #fff; color: #0033a0; cursor: pointer;
+                            font-size: 13px; line-height: 1;
+                            transition: background .18s ease, color .18s ease, border-color .18s ease, transform .12s ease, box-shadow .18s ease;
+                        }
+                        .bp-copy-icon:hover{ background:#0033a0; color:#fff; box-shadow:0 4px 12px rgba(0,51,160,.25); }
+                        .bp-copy-icon:active{ transform: translateY(-50%) scale(.92); }
+                        .bp-copy-icon.is-copied{ background:#1f9d55; border-color:#1f9d55; color:#fff; box-shadow:0 4px 12px rgba(31,157,85,.3); animation: bp-pop .3s ease; }
+                        @keyframes bp-pop{ 0%{ transform: translateY(-50%) scale(.8); } 50%{ transform: translateY(-50%) scale(1.12); } 100%{ transform: translateY(-50%) scale(1); } }
+                        .bp-copy-btn i{ font-size:12px; }
                     </style>
                 </head>
                 <body>
@@ -282,9 +300,15 @@
 
                                         <div class="bg-light rounded p-3 mb-4">
                                             <p class="mb-1 small text-muted">Referencia Externa</p>
-                                            <p class="fw-bold mb-0">
-                                                <t t-esc="transaction.external_reference or 'N/A'"/>
-                                            </p>
+                                            <div class="bp-ref-wrapper">
+                                                <span class="fw-bold mb-0"><t t-esc="transaction.external_reference or 'N/A'"/></span>
+                                                <button type="button" class="bp-copy-icon"
+                                                        t-att-data-copy="transaction.external_reference or ''"
+                                                        onclick="bpCopyToClipboard(this.getAttribute('data-copy'), this)"
+                                                        title="Copiar referencia" aria-label="Copiar referencia">
+                                                    <i class="fa fa-copy"></i>
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <!-- ====== DATOS DEL PAGADOR (solo C2P y solo en pago exitoso) ====== -->
@@ -364,6 +388,34 @@
                             </div>
                         </div>
                     </div>
+
+
+                    <script type="text/javascript">
+                        function bpCopyToClipboard(text, btn){
+                            if(!text || !btn){ return; }
+                            var original = btn.innerHTML;
+                            var done = function(){
+                                btn.classList.add('is-copied');
+                                btn.innerHTML = '<i class="fa fa-check"></i>';
+                                setTimeout(function(){
+                                    btn.classList.remove('is-copied');
+                                    btn.innerHTML = original;
+                                }, 1800);
+                            };
+                            if (navigator.clipboard &amp;&amp; navigator.clipboard.writeText){
+                                navigator.clipboard.writeText(text).then(done).catch(function(){ bpFallbackCopy(text, done); });
+                            } else {
+                                bpFallbackCopy(text, done);
+                            }
+                        }
+                        function bpFallbackCopy(text, done){
+                            var ta = document.createElement('textarea');
+                            ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+                            document.body.appendChild(ta); ta.select();
+                            try { document.execCommand('copy'); } catch(e){}
+                            document.body.removeChild(ta); done();
+                        }
+                    </script>
                 </body>
             </html>
         </template>
