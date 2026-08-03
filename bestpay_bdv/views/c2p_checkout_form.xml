@@ -160,7 +160,7 @@
                                                     <option value="J">J</option>
                                                     <option value="G">G</option>
                                                 </select>
-                                                <input type="text" class="form-control" id="customer_doc_number" placeholder="12345678" maxlength="10" pattern="[0-9]{6,10}" required="1"/>
+                                                <input type="text" class="form-control bp-digits" id="customer_doc_number" placeholder="12345678" maxlength="10" pattern="[0-9]{6,10}" inputmode="numeric" required="1"/>
                                             </div>
                                         </div>
 
@@ -168,7 +168,7 @@
                                             <label class="form-label">Teléfono Móvil</label>
                                             <div class="input-group">
                                                 <span class="input-group-text bg-white">+58</span>
-                                                <input type="text" class="form-control" id="customer_phone" placeholder="4121234567" maxlength="11" pattern="[0-9]{10,11}" required="1"/>
+                                                <input type="text" class="form-control bp-digits" id="customer_phone" placeholder="4121234567" maxlength="11" pattern="[0-9]{10,11}" inputmode="numeric" required="1"/>
                                             </div>
                                             <small class="text-muted">Sin el 0 inicial. Ej: 4121234567</small>
                                         </div>
@@ -228,7 +228,7 @@
 
                 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
                 
-                                <script type="text/javascript">
+                <script type="text/javascript">
                     var uuidHash = document.getElementById('tx-data').getAttribute('data-hash');
                     var errorContainer = document.getElementById('error-container');
                     var currentStep = 1;
@@ -395,6 +395,26 @@
                             });
                         }
                     });
+                </script>
+
+                <script type="text/javascript">
+                    (function(){
+                        function bpEnableDigitsOnly(){
+                            document.querySelectorAll('.bp-digits').forEach(function(el){
+                                el.addEventListener('input', function(){
+                                    var cleaned = this.value.replace(/\D/g, '');
+                                    if (cleaned !== this.value){
+                                        this.value = cleaned;
+                                    }
+                                });
+                            });
+                        }
+                        if (document.readyState === 'loading'){
+                            document.addEventListener('DOMContentLoaded', bpEnableDigitsOnly);
+                        } else {
+                            bpEnableDigitsOnly();
+                        }
+                    })();
                 </script>
             </body>
         </html>
