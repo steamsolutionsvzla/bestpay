@@ -341,6 +341,24 @@ class PaymentTransactionBDV(models.Model):
             "Accept": "application/json"
         }
 
+    def _bdv_c2p_log_stage(self, stage, request_payload=None, response_payload=None):
+        """Agrega (append) un bloque de log por etapa C2P con encabezado.
+        Salida (peticion) -> bank_out_log | Entrada (respuesta) -> bank_in_log."""
+        def dump(data):
+            try:
+                return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            except Exception:
+                return str(data)
+        vals = {}
+        if request_payload is not None:
+            vals['bank_out_log'] = (self.bank_out_log or '') + \
+                f"=== SALIDA · {stage} ===\n{dump(request_payload)}\n\n"
+        if response_payload is not None:
+            vals['bank_in_log'] = (self.bank_in_log or '') + \
+                f"=== ENTRADA · {stage} ===\n{dump(response_payload)}\n\n"
+        if vals:
+            self.write(vals)
+
     def bdv_c2p_generate_otp(self):
         """Paso 1: Solicita al BDV el envío del OTP al cliente."""
         self.ensure_one()
@@ -352,7 +370,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P OTP Request: {url} | Payload: {payload}")
         
         # Guardar el request en bank_out_log (salida al banco)
-        self.write({'bank_out_log': json.dumps(payload, indent=2)})
+        self._bdv_c2p_log_stage("GENERATE OTP", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
@@ -360,7 +378,7 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P OTP Response: {data}")
             
             # Guardar la respuesta en bank_in_log (entrada del banco)
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("GENERATE OTP", response_payload=data)
             
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'otp_sent'})
@@ -369,7 +387,7 @@ class PaymentTransactionBDV(models.Model):
             self.write({'bdv_c2p_status': 'error', 'state_message': data.get('message')})
             raise UserError(f"Error generando OTP: {data.get('message')}")
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("GENERATE OTP · ERROR", response_payload={'error': str(e)})
             raise
 
     def bdv_c2p_process_payment(self):
@@ -411,7 +429,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P Process Request: {url} | Payload: {payload}")
         
         # Guardar el request
-        self.write({'bank_out_log': json.dumps(payload, indent=2, ensure_ascii=False)})
+        self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=20)
@@ -419,7 +437,7 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P Process Response: {data}")
             
             # Guardar la respuesta
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", response_payload=data)
 
             if data.get('code') == '1000' and data.get('data'):
                 response_data = data['data']
@@ -439,7 +457,7 @@ class PaymentTransactionBDV(models.Model):
             })
             return {'success': False, 'message': data.get('message')}
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP) · ERROR", response_payload={'error': str(e)})
             raise
 
     def bdv_c2p_annul(self):
@@ -458,7 +476,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P Annul Request: {url} | Payload: {payload}")
         
         # Guardar el request
-        self.write({'bank_out_log': json.dumps(payload, indent=2)})
+        self._bdv_c2p_log_stage("ANULACION", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
@@ -466,12 +484,12 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P Annul Response: {data}")
             
             # Guardar la respuesta
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("ANULACION", response_payload=data)
 
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'annulled', 'state': 'cancel'})
                 return True
             return False
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("ANULACION · ERROR", response_payload={'error': str(e)})
             raise
