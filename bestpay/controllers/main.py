@@ -3,6 +3,8 @@ from odoo import http, fields
 from odoo.http import request
 import json
 import logging
+import base64
+import binascii
 
 _logger = logging.getLogger(__name__)
 
@@ -19,12 +21,14 @@ class BestPayApiController(http.Controller):
                 'status': 'error',
                 'message': 'Autenticación requerida. Use Basic Auth con Client ID y Client Secret.'
             }
-        
-        import base64
+
         try:
-            credentials = base64.b64decode(auth_header[6:]).decode('utf-8')
-            client_id, client_secret = credentials.split(':', 1)
-        except (ValueError, UnicodeDecodeError):
+            # Validamos que sea un token Basic bien formado y luego buscamos por el token codificado.
+            encoded_token = auth_header[6:].strip()
+            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
+            if ':' not in decoded_credentials:
+                raise ValueError('Formato inválido')
+        except (ValueError, UnicodeDecodeError, binascii.Error):
             return {'status': 'error', 'message': 'Credenciales Basic malformadas.'}
 
         # Al usar auth='none', necesitamos forzar el uso de una base de datos
@@ -34,8 +38,7 @@ class BestPayApiController(http.Controller):
         # 2. Validar que el cliente exista
         partner = request.env['res.partner'].sudo().search([
             ('is_api_client', '=', True),
-            ('bestpay_client_id', '=', client_id),
-            ('bestpay_client_secret', '=', client_secret),
+            ('bestpay_basic_token', '=', encoded_token),
         ], limit=1)
         
         if not partner:
