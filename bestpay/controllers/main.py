@@ -235,7 +235,7 @@ class BestPayApiController(http.Controller):
             }
 
         # 8. Respuesta exitosa
-        return {
+        response = {
             'status': 'success',
             'transaction_id': tx.id,
             'odoo_reference': tx.reference,
@@ -244,3 +244,5 @@ class BestPayApiController(http.Controller):
             'flow_type': tx.bestpay_flow_type,
             'payment_details': datos_banco
         }
+        tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False)})
+        return response

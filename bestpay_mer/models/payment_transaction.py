@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import hashlib
+import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
@@ -127,7 +128,7 @@ class PaymentTransaction(models.Model):
             "invoiceNumber": {
                 "number": str(self.id).zfill(12), 
                 "invoiceCreationDate": fields.Date.today().strftime("%Y-%m-%d"),
-                "invoiceCancelledDate": ""
+                "invoiceCancelledDate": fields.Date.today().strftime("%Y-%m-%d"),
             },
             "contract": {
                 "contractNumber": str(self.id), # Pasamos el ID de la transacción como número de contrato
@@ -167,3 +168,49 @@ class PaymentTransaction(models.Model):
         
         # 5. Salida final en Base64 plano para el parámetro del botón
         return base64.b64encode(encrypted).decode('utf-8')
+
+    def _notify_api_client_webhook(self):
+        self.ensure_one()
+        
+        # Verificar si el cliente tiene configurada una URL de webhook
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro:
+            _logger.info(f"[WEBHOOK TERCERO] El cliente {partner.name} no tiene configurada una webhook_url_3ro.")
+            return False
+
+        webhook_url = partner.webhook_url_3ro
+
+        # Construir el payload a enviar
+        payload = {
+            "event": "payment.completed" if self.state == 'done' else f"payment.{self.state}",
+            "external_reference": self.external_reference,
+            "odoo_reference": self.reference,
+            "transaction_id": self.id,
+            "uuid_hash": self.uuid_hash,
+            "status": self.state,
+            "amount": self.amount,
+            "currency": self.currency_id.name,
+            "amount_ves": self.amount_ves,
+            "exchange_rate": self.exchange_rate_bcv,
+            "bank_reference": self.acquirer_reference or '',
+        }
+
+        try:
+            _logger.info(f"[WEBHOOK TERCERO] Notifying URL {webhook_url} for transaction {self.reference}")
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=10
+            )
+            
+            # Opcional: Guardar log de la respuesta del tercero
+            self.write({
+                'bank_out_log': (self.bank_out_log or '') + f"\n\n--- [WEBHOOK NOTIFICACIÓN TERCERO] ---\nURL: {webhook_url}\nResponse Code: {response.status_code}\nResponse: {response.text}"
+            })
+            
+            if response.status_code not in [200, 201, 204]:
+                _logger.warning(f"[WEBHOOK TERCERO] El tercero respondió con código inesperado: {response.status_code}")
+                
+        except Exception as e:
+                _logger.error(f"[WEBHOOK TERCERO] Error al notificar al tercero: {str(e)}")
