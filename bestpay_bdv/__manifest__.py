@@ -11,6 +11,7 @@
     'data': [
         'security/ir.model.access.csv',
         'data/payment_provider_data.xml',
+        'data/ir_cron.xml',                  
         'views/res_partner_views.xml',
         'views/payment_provider_views.xml',
         'views/templates.xml',

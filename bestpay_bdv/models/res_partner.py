@@ -40,3 +40,35 @@ class ResPartnerBDV(models.Model):
         string="Teléfono/Cuenta Destino C2P",
         help="Número de teléfono o cuenta destino del comercio para recibir pagos C2P"
     )
+
+        # =================================================================
+    # 🔔 CONFIGURACIÓN DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
+    # =================================================================
+    # TODO [MIGRACIÓN FASE 7]: Mover estos 3 campos al módulo base 'bestpay'
+    # para que sean compartidos por BDV y Mercantil. Al hacerlo, eliminarlos
+    # de aquí y ajustar las vistas. Wilson ya tiene nombres similares en
+    # 'bestpay_mer/models/res_partner.py' que también deberían migrarse.
+    webhook_url_3ro = fields.Char(
+        string="URL Webhook del Tercero",
+        help="URL del sistema del tercero (ej. Koole) donde BestPay notificará "
+             "de forma asíncrona cuando el pago sea confirmado por el banco.",
+        copy=False,
+    )
+    default_return_url_3ro = fields.Char(
+        string="URL de Retorno por Defecto (3ro)",
+        help="URL a la que el checkout redirigirá al pagador tras completar "
+             "el flujo (éxito/error). Se usará en la Fase 5.",
+        copy=False,
+    )
+    bestpay_webhook_secret = fields.Char(
+        string="Secreto Webhook (HMAC-SHA256)",
+        help="Secreto compartido usado para firmar los webhooks salientes. "
+             "El tercero debe conocer este valor para validar la autenticidad.",
+        copy=False,
+        groups="base.group_system",
+    )
+    bestpay_webhook_active = fields.Boolean(
+        string="Webhook Activo",
+        default=True,
+        help="Desmarca para suspender los envíos de webhook a este tercero.",
+    )

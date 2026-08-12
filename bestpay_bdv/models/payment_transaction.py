@@ -2,6 +2,10 @@
 import json
 import logging
 import requests
+import hmac
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
@@ -140,6 +144,35 @@ class PaymentTransactionBDV(models.Model):
     c2p_annulment_request_log = fields.Text(string="C2P Annulment Request", readonly=True)
     c2p_annulment_response_log = fields.Text(string="C2P Annulment Response", readonly=True)
 
+        # =================================================================
+    # 🔔 CAMPOS DE CONTROL DEL WEBHOOK AL TERCERO
+    # =================================================================
+    # TODO [MIGRACIÓN FASE 7]: Mover estos campos al módulo base 'bestpay'
+    # junto con los campos del partner, para que sean comunes a BDV y Mercantil.
+    bestpay_webhook_state = fields.Selection([
+        ('pending', 'Pendiente'),
+        ('sent', 'Enviado'),
+        ('failed', 'Fallido'),
+        ('done', 'Confirmado por el tercero'),
+    ], string="Estado Webhook 3ro", copy=False, index=True,
+       help="Estado del webhook saliente hacia el sistema del tercero.")
+    bestpay_webhook_attempts = fields.Integer(
+        string="Intentos de Webhook", default=0, copy=False,
+        help="Número de veces que se ha intentado enviar el webhook.")
+    bestpay_webhook_last_error = fields.Text(
+        string="Último Error del Webhook", copy=False, readonly=True)
+    bestpay_webhook_event_id = fields.Char(
+        string="ID de Evento Webhook", copy=False, index=True,
+        help="Identificador único del evento (para idempotencia del tercero).")
+    bestpay_webhook_sent_at = fields.Datetime(
+        string="Enviado a las", copy=False, readonly=True)
+    bestpay_webhook_next_retry = fields.Datetime(
+        string="Próximo Reintento", copy=False, index=True,
+        help="Fecha/hora del próximo intento de envío si falló.")
+    MAX_WEBHOOK_ATTEMPTS = 5  # Constante: máximo de reintentos
+    # Backoff exponencial en minutos: 2, 5, 30, 120, 360
+    WEBHOOK_BACKOFF_MINUTES = [2, 5, 30, 120, 360]
+
     def bdv_send_conciliation(self):
         """
         Envía los datos del pago móvil al BDV para conciliación.
@@ -216,6 +249,8 @@ class PaymentTransactionBDV(models.Model):
                     'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
+                 # 🔔 Disparar webhook al tercero (asíncrono, lo procesa el cron)
+                self._bestpay_trigger_webhook_3ro()
                 return True
 
             elif code == 1010:
@@ -448,6 +483,9 @@ class PaymentTransactionBDV(models.Model):
                     'state': 'done',
                     'state_message': 'Pago C2P aprobado por el BDV'
                 })
+
+                # 🔔 Disparar webhook al tercero (asíncrono, lo procesa el cron)
+                self._bestpay_trigger_webhook_3ro()
                 return {'success': True, 'data': response_data}
             
             self.write({
@@ -493,3 +531,218 @@ class PaymentTransactionBDV(models.Model):
         except Exception as e:
             self._bdv_c2p_log_stage("ANULACION · ERROR", response_payload={'error': str(e)})
             raise
+    
+        # =================================================================
+    # 🔔 MÉTODOS DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
+    # =================================================================
+    # TODO [MIGRACIÓN FASE 7]: Mover toda esta lógica al módulo base 'bestpay'
+    # para que sea reutilizada por Mercantil. Al migrar, estos métodos deben
+    # vivir en 'bestpay/models/payment_transaction.py'.
+    def _bestpay_trigger_webhook_3ro(self):
+        """
+        Dispara el webhook al tercero. Intenta envío inmediato; si falla, lo deja para el cron.
+        Esto mejora la UX: el padre ve la deuda pagada al instante en el 95% de los casos.
+        """
+        self.ensure_one()
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_active:
+            _logger.info("[BESTPAY WEBHOOK] TX %s: no configurado o desactivado.", self.id)
+            return
+        
+        # Generar event_id si no existe
+        event_id = self.bestpay_webhook_event_id or f"evt_{secrets.token_urlsafe(24)}"
+        self.write({
+            'bestpay_webhook_event_id': event_id,
+            'bestpay_webhook_state': 'pending',  # Temporal durante el intento
+            'bestpay_webhook_attempts': 0,
+            'bestpay_webhook_next_retry': False,
+        })
+        
+        # 🚀 INTENTO SÍNCRONO INMEDIATO
+        _logger.info("[BESTPAY WEBHOOK] TX %s: Intento síncrono inmediato...", self.id)
+        self._bestpay_send_webhook_3ro()
+
+    def _bestpay_build_webhook_payload_3ro(self):
+        """Construye el payload JSON que se enviará al tercero."""
+        self.ensure_one()
+        # Recolectar datos bancarios según el método usado
+        bank_data = {}
+        if self.payment_method_id.code == 'bdv_c2p':
+            bank_data = {
+                'end_to_end_id': self.bdv_c2p_end_to_end_id or False,
+                'bank_reference': self.bdv_c2p_reference_generated or False,
+                'approval_code': False,
+            }
+        else:
+            # Pago Móvil: los datos están en la respuesta del banco (bank_in_log)
+            try:
+                bank_response = json.loads(self.bank_in_log or '{}')
+                data = bank_response.get('data', {}) if isinstance(bank_response, dict) else {}
+                bank_data = {
+                    'end_to_end_id': data.get('endToEndId') or data.get('end_to_end_id') or False,
+                    'bank_reference': data.get('referencia') or self.bdv_referencia or False,
+                    'approval_code': data.get('approvalCode') or False,
+                }
+            except (ValueError, AttributeError):
+                bank_data = {'bank_reference': self.bdv_referencia or False}
+
+        return {
+            'event_id': self.bestpay_webhook_event_id,
+            'event_type': 'payment.done',
+            'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'transaction': {
+                'uuid_hash': self.uuid_hash,
+                'reference': self.reference,
+                'provider': self.provider_id.code,
+                'payment_method': self.payment_method_id.code if self.payment_method_id else False,
+                'external_reference': self.external_reference,
+                'amount': float(self.amount),
+                'currency': self.currency_id.name if self.currency_id else False,
+                'amount_ves': float(self.amount_ves or 0.0),
+                'exchange_rate_bcv': float(self.exchange_rate_bcv or 0.0),
+                'state': self.state,
+                'client_note': self.client_note or '',
+            },
+            'bank_data': bank_data,
+        }
+
+    def _bestpay_compute_webhook_signature_3ro(self, payload_str, secret):
+        """Calcula la firma HMAC-SHA256 del payload usando el secreto compartido."""
+        return hmac.new(
+            key=secret.encode('utf-8'),
+            msg=payload_str.encode('utf-8'),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
+    @api.model
+    def _bestpay_process_pending_webhooks(self):
+        """
+        Método invocado por el CRON cada 2 minutos.
+        Procesa todas las transacciones con webhook pendiente o con reintento programado.
+        """
+        now = fields.Datetime.now()
+        # Buscar transacciones candidatas:
+        # - webhook pendiente O fallido con intentos < MAX
+        # - próxima hora de reintento ya alcanzada
+        candidates = self.search([
+            ('bestpay_webhook_state', 'in', ['pending', 'failed']),
+            ('bestpay_webhook_attempts', '<', self.MAX_WEBHOOK_ATTEMPTS),
+            '|',
+            ('bestpay_webhook_next_retry', '<=', now),
+            ('bestpay_webhook_next_retry', '=', False),
+        ], limit=20)  # Procesamos en lotes de 20 por ejecución de cron
+
+        _logger.info(
+            "[BESTPAY WEBHOOK CRON] Procesando %d transacciones candidatas.",
+            len(candidates)
+        )
+
+        for tx in candidates:
+            tx._bestpay_send_webhook_3ro()
+
+    def _bestpay_send_webhook_3ro(self):
+        """Envía el webhook al tercero (un intento). Actualiza el estado."""
+        self.ensure_one()
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_secret:
+            _logger.warning(
+                "[BESTPAY WEBHOOK] TX %s sin URL o secreto. Se marca como fallido permanente.",
+                self.id
+            )
+            self.write({
+                'bestpay_webhook_state': 'failed',
+                'bestpay_webhook_last_error': 'URL o secreto no configurados en el partner.',
+                'bestpay_webhook_attempts': self.MAX_WEBHOOK_ATTEMPTS,  # No reintenta más
+            })
+            return
+
+        try:
+            payload = self._bestpay_build_webhook_payload_3ro()
+            # Serialización estable: sort_keys para garantizar misma firma siempre
+            payload_str = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            signature = self._bestpay_compute_webhook_signature_3ro(payload_str, partner.bestpay_webhook_secret)
+
+            headers = {
+                'Content-Type': 'application/json; charset=utf-8',
+                'X-BestPay-Signature': f'sha256={signature}',
+                'X-BestPay-Event-ID': self.bestpay_webhook_event_id or '',
+                'User-Agent': 'BestPay-Webhook/1.0',
+            }
+
+            _logger.info(
+                "[BESTPAY WEBHOOK] TX %s → %s (intento %d/%d)",
+                self.id, partner.webhook_url_3ro,
+                self.bestpay_webhook_attempts + 1, self.MAX_WEBHOOK_ATTEMPTS
+            )
+
+            response = requests.post(
+                partner.webhook_url_3ro,
+                data=payload_str,
+                headers=headers,
+                timeout=10,
+            )
+
+            # Guardar respuesta en el campo existente de logs
+            response_snapshot = json.dumps({
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'body': response.text[:2000],
+                'timestamp': datetime.utcnow().isoformat(),
+            }, ensure_ascii=False, indent=2)
+
+            if 200 <= response.status_code < 300:
+                # ✅ ÉXITO
+                self.write({
+                    'bestpay_webhook_state': 'done',
+                    'bestpay_webhook_attempts': self.bestpay_webhook_attempts + 1,
+                    'bestpay_webhook_sent_at': fields.Datetime.now(),
+                    'bestpay_webhook_last_error': False,
+                    'payment_request_response': response_snapshot,
+                })
+                _logger.info("[BESTPAY WEBHOOK] ✅ TX %s confirmada por tercero (HTTP %s).",
+                             self.id, response.status_code)
+            else:
+                # ⚠️ Respuesta no-2xx → reintento
+                error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
+                self._bestpay_schedule_retry(error_msg)
+
+        except requests.exceptions.Timeout:
+            self._bestpay_schedule_retry("Timeout (10s) esperando respuesta del tercero.")
+        except requests.exceptions.ConnectionError as e:
+            self._bestpay_schedule_retry(f"Error de conexión: {str(e)[:200]}")
+        except Exception as e:
+            _logger.exception("[BESTPAY WEBHOOK] Error inesperado en TX %s", self.id)
+            self._bestpay_schedule_retry(f"Error inesperado: {str(e)[:200]}")
+
+    def _bestpay_schedule_retry(self, error_msg):
+        """Programa el próximo reintento con backoff exponencial."""
+        self.ensure_one()
+        attempts = self.bestpay_webhook_attempts + 1
+        if attempts >= self.MAX_WEBHOOK_ATTEMPTS:
+            # Ya no reintenta más
+            self.write({
+                'bestpay_webhook_state': 'failed',
+                'bestpay_webhook_attempts': attempts,
+                'bestpay_webhook_last_error': error_msg,
+            })
+            _logger.warning(
+                "[BESTPAY WEBHOOK] ❌ TX %s agotó %d intentos. Último error: %s",
+                self.id, attempts, error_msg
+            )
+            return
+
+        # Calcular próximo reintento usando backoff
+        backoff_idx = min(attempts - 1, len(self.WEBHOOK_BACKOFF_MINUTES) - 1)
+        minutes = self.WEBHOOK_BACKOFF_MINUTES[backoff_idx]
+        next_retry = datetime.utcnow() + timedelta(minutes=minutes)
+
+        self.write({
+            'bestpay_webhook_state': 'failed',
+            'bestpay_webhook_attempts': attempts,
+            'bestpay_webhook_last_error': error_msg,
+            'bestpay_webhook_next_retry': next_retry,
+        })
+        _logger.info(
+            "[BESTPAY WEBHOOK] ⏱️ TX %s reintentará en %d min (intento %d/%d). Error: %s",
+            self.id, minutes, attempts, self.MAX_WEBHOOK_ATTEMPTS, error_msg
+        )
