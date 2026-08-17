@@ -60,12 +60,6 @@
                             <field name="bestpay_webhook_secret" password="True"/>
                             <field name="bestpay_webhook_active" widget="boolean_toggle"/>
                         </group>
-                        <div class="alert alert-info mt-2 mb-0" role="alert">
-                            <i class="fa fa-info-circle me-1" title="Información de seguridad" aria-label="Información"/>
-                            <strong>Seguridad:</strong> El webhook se firma con HMAC-SHA256
-                            usando el secreto configurado. El tercero debe validar la firma
-                            antes de procesar la notificación.
-                        </div>
                     </group>
 
                 </page>
