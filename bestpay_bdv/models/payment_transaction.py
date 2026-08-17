@@ -344,11 +344,34 @@ class PaymentTransactionBDV(models.Model):
 
         _logger.info("[BDV] Link generado con UUID_HASH para TX %s: %s", self.id, payment_link)
 
-        return {
+        datos_banco = {
             'payment_link': payment_link,
             'uuid_hash': self.uuid_hash,
             'flow_type': 'redirect',
         }
+
+        # Guardar la respuesta que se le enviará al tercero cuando el proveedor es BDV.
+        # Wilson indicó que este log debe contener los datos relevantes para el 3ro:
+        # link de pago, referencia Odoo y hash de la operación.
+        respuesta_cliente = {
+            'status': 'success',
+            'transaction_id': self.id,
+            'odoo_reference': self.reference,
+            'external_reference': self.external_reference,
+            'uuid_hash': self.uuid_hash,
+            'flow_type': self.bestpay_flow_type or 'redirect',
+            'payment_details': datos_banco,
+        }
+
+        self.write({
+            'payment_request_response': json.dumps(
+                respuesta_cliente,
+                ensure_ascii=False,
+                indent=4
+            )
+        })
+
+        return datos_banco
 
     # =========================================================================
     # MÉTODOS API C2P CUENTAS MÚLTIPLES (BDV)
@@ -697,7 +720,6 @@ class PaymentTransactionBDV(models.Model):
                     'bestpay_webhook_attempts': self.bestpay_webhook_attempts + 1,
                     'bestpay_webhook_sent_at': fields.Datetime.now(),
                     'bestpay_webhook_last_error': False,
-                    'payment_request_response': response_snapshot,
                 })
                 _logger.info("[BESTPAY WEBHOOK] ✅ TX %s confirmada por tercero (HTTP %s).",
                              self.id, response.status_code)
