@@ -130,28 +130,12 @@ class BestPayWebhookController(http.Controller):
         if not partner or not partner.mercantil_payment_url or not partner.mercantil_merchant_id:
             return request.make_response("Error interno: Configuración de pasarela incompleta.", status=500)
 
-        # 3. Generar el link "Justo a Tiempo"
+        # 3. Reutilizar el link vigente o generar uno nuevo "Justo a Tiempo"
         try:
-            # =================================================================
-            # LLAMADA ULTRA LIMPIA AL CORE PRINCIPAL
-            # =================================================================
-            # Invoca el método unificado del core que ya maneja de forma segura 
-            # las conversiones Base USD.
-            tx._bestpay_action_recalculate_jit_ves()
+            # Solo regenera si no existe, expiró (>1 día) o el monto VES cambió.
+            custom_link = tx._bestpay_get_or_generate_mer_link()
 
-            # 3. Generar el paquete criptográfico con la data recién actualizada
-            mercantil_payment_url = partner.mercantil_payment_url.rstrip('/')
-            merchant_id = partner.mercantil_merchant_id
-            integrator_id = partner.mercantil_integrator_id or ""
-            
-            # Criptografía AES
-            encrypted_data = tx._encrypt_transaction_data()
-
-            custom_link = f"{mercantil_payment_url}/?merchantid={merchant_id}&transactiondata={encrypted_data}&integratorid={integrator_id}"
-
-            tx.write({'payment_link_bank_mer': custom_link})
-            
-            _logger.info("\n" + "="*80 + f"\n[BESTPAY MERCANTIL DEBUG] LINK GENERADO CON NUEVA TASA:\n{custom_link}\n" + "="*80)
+            _logger.info("\n" + "="*80 + f"\n[BESTPAY MERCANTIL DEBUG] LINK DE PAGO:\n{custom_link}\n" + "="*80)
             
             # Redireccionar de inmediato
             return werkzeug.utils.redirect(custom_link, code=303)

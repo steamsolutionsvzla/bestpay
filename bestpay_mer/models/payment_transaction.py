@@ -4,11 +4,14 @@ import json
 import logging
 import hashlib
 import requests
+from datetime import timedelta
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
 from odoo import models, fields, api
 from odoo.exceptions import UserError
+
+MER_LINK_VALIDITY = timedelta(days=1)
 
 _logger = logging.getLogger(__name__)
 
@@ -42,6 +45,17 @@ class PaymentTransaction(models.Model):
     payment_link_bank_mer = fields.Char(
         string="Link de boton de Pago Mercantil",
         help="Link generado para redirigir al cliente final al endpoint del banco Mercantil.",
+        readonly=True
+    )
+
+    payment_link_bank_mer_date = fields.Datetime(
+        string="Fecha de Generación del Link Bancario",
+        readonly=True
+    )
+
+    payment_link_bank_mer_amount_ves = fields.Monetary(
+        string="Monto VES al Generar el Link",
+        currency_field='currency_ves_id',
         readonly=True
     )
 
@@ -87,6 +101,43 @@ class PaymentTransaction(models.Model):
             }
             
         return super()._bestpay_process_transaction_with_bank(api_kwargs)
+
+    # =========================================================================
+    # GENERACIÓN / CACHÉ DEL LINK BANCARIO
+    # =========================================================================
+    def _bestpay_get_or_generate_mer_link(self):
+        """
+        Recalcula el monto VES y reutiliza el link bancario ya generado salvo que
+        no exista, haya expirado (> 1 día) o el monto VES recalculado haya cambiado.
+        """
+        self.ensure_one()
+        partner = self.bestpay_client_id
+
+        self._bestpay_action_recalculate_jit_ves()
+
+        link_expired = (
+            not self.payment_link_bank_mer_date
+            or fields.Datetime.now() - self.payment_link_bank_mer_date >= MER_LINK_VALIDITY
+        )
+        amount_changed = self.payment_link_bank_mer_amount_ves != self.amount_ves
+
+        if self.payment_link_bank_mer and not link_expired and not amount_changed:
+            return self.payment_link_bank_mer
+
+        mercantil_payment_url = partner.mercantil_payment_url.rstrip('/')
+        merchant_id = partner.mercantil_merchant_id
+        integrator_id = partner.mercantil_integrator_id or ""
+
+        encrypted_data = self._encrypt_transaction_data()
+        custom_link = f"{mercantil_payment_url}/?merchantid={merchant_id}&transactiondata={encrypted_data}&integratorid={integrator_id}"
+
+        self.write({
+            'payment_link_bank_mer': custom_link,
+            'payment_link_bank_mer_date': fields.Datetime.now(),
+            'payment_link_bank_mer_amount_ves': self.amount_ves,
+        })
+
+        return custom_link
 
     # =========================================================================
     # FUNCIONES DE CONSTRUCCIÓN Y ENCRIPTACIÓN (MERCANTIL)
