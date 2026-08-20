@@ -152,10 +152,7 @@ class BestpayBDVController(http.Controller):
     def bdv_webhook_notify(self, **post):
         """
         Endpoint para recibir notificaciones automáticas del BDV.
-        Respuestas obligatorias (siempre HTTP 200):
-        - 00: Notificado correctamente
-        - 01: Pago previamente recibido
-        - 99: Error en API-KEY
+        Busca la transacción por el TELÉFONO del pagador (recomendación del BDV).
         """
         try:
             raw_data = request.httprequest.data.decode('utf-8')
@@ -164,66 +161,62 @@ class BestpayBDVController(http.Controller):
             # 1. Validar API-KEY del header
             api_key_header = request.httprequest.headers.get('API-KEY', '').strip()
             if not api_key_header:
-                return Response(json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}), status=200, content_type='application/json')
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
+                    status=200, content_type='application/json'
+                )
 
             # 2. Parsear JSON
             try:
                 payload = json.loads(raw_data)
             except json.JSONDecodeError:
-                return Response(json.dumps({"codigo": "99", "mensajeCliente": "JSON inválido", "mensajeSistema": "Error al parsear"}), status=200, content_type='application/json')
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "JSON inválido", "mensajeSistema": "Error al parsear"}),
+                    status=200, content_type='application/json'
+                )
 
-            # 3. Extraer datos clave
-            referencia = payload.get('referenciaBancoOrdenante', '')
-            monto_str = payload.get('monto', '0.0')
-            numero_comercio = payload.get('numeroComercio', '') # Teléfono del comercio receptor
-
-            try:
-                monto = float(monto_str)
-            except (ValueError, TypeError):
-                monto = 0.0
-
-            # 4. Validar API Key contra el Partner (Comercio)
-            partner = request.env['res.partner'].sudo().search([('bdv_telefono_destino', '=', numero_comercio)], limit=1)
-            api_key_valida = False
+            # 3. Identificar el comercio receptor
+            numero_comercio = payload.get('numeroComercio', '')
             
+            # 4. Validar API Key contra el Partner (Comercio)
+            partner = request.env['res.partner'].sudo().search([
+                ('bdv_telefono_destino', '=', numero_comercio)
+            ], limit=1)
+            
+            api_key_valida = False
             if partner and partner.bdv_api_key_notification:
                 api_key_valida = (api_key_header == partner.bdv_api_key_notification)
             else:
-                # Respaldo para QA si no hay partner configurado
+                # Respaldo para QA
                 api_key_valida = (api_key_header == '97F6F54EF1A84F3A24FE19A3B338C77A')
 
             if not api_key_valida:
-                _logger.warning(f"[BDV NOTIFICACIÓN] API Key inválida para comercio {numero_comercio}")
-                return Response(json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}), status=200, content_type='application/json')
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
+                    status=200, content_type='application/json'
+                )
 
-            # 5. Buscar transacción por Referencia + Monto (Opción más segura)
-            transaction = request.env['payment.transaction'].sudo().search([
-                ('bdv_referencia', '=', referencia),
-                ('bdv_importe', '=', monto),
-                ('state', 'in', ['draft', 'pending']),
-            ], limit=1)
+            # 5. Delegar la lógica de negocio al modelo (Búsqueda por Teléfono)
+            resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
 
-            # 6. Procesar según el resultado
-            if transaction:
-                if transaction.state == 'done':
-                    return Response(json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}), status=200, content_type='application/json')
-                
-                # Marcar como pagada y notificar al tercero
-                transaction.write({
-                    'state': 'done',
-                    'bdv_conciliation_state': 'approved',
-                    'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
-                })
-                transaction._bestpay_trigger_webhook_3ro()
-                _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {transaction.id} marcada como pagada")
-                return Response(json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}), status=200, content_type='application/json')
+            # 6. Responder al BDV
+            if resultado['codigo'] == '01':
+                return Response(
+                    json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
+                    status=200, content_type='application/json'
+                )
             else:
-                _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ No hay transacción pendiente para Ref: {referencia}, Monto: {monto}")
-                return Response(json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}), status=200, content_type='application/json')
+                return Response(
+                    json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
+                    status=200, content_type='application/json'
+                )
 
         except Exception as e:
             _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
-            return Response(json.dumps({"codigo": "00", "mensajeCliente": "Error interno", "mensajeSistema": "Notificación recibida con error"}), status=200, content_type='application/json')
+            return Response(
+                json.dumps({"codigo": "00", "mensajeCliente": "Error interno", "mensajeSistema": "Notificación recibida con error"}),
+                status=200, content_type='application/json'
+            )
 
     # =====================================================
     # MÉTODO AUXILIAR: GENERAR REFERENCIA SECUENCIAL
