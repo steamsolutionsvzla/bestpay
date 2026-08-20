@@ -52,6 +52,13 @@ class ResPartnerBDV(models.Model):
         copy=False,
     )
 
+    bdv_telefono_notificacion = fields.Char(
+        string="Teléfono para Notificación BDV",
+        help="Teléfono que el BDV usará para enviar notificaciones webhook. "
+            "En QA usar: 04141234567",
+        copy=False,
+    )
+
     # === API CONSULTA DE MOVIMIENTOS ===
     bdv_api_key_movimientos = fields.Char(
         string="API Key Consulta Movimientos BDV",

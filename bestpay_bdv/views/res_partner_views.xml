@@ -39,10 +39,15 @@
                             
                             <!-- GRUPO 3: Notificación (NUEVO)            -->
                             <group string="Notificación">
-                                <field name="bdv_api_key_notification"
-                                       password="True"
-                                       placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                <group string="Notificación">
+                                    <field name="bdv_api_key_notification"
+                                        password="True"
+                                        placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                    <field name="bdv_telefono_notificacion"
+                                        placeholder="04141234567"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                </group>
                             </group>
 
                             <!-- GRUPO 4: Consulta de Movimientos (NUEVO) -->

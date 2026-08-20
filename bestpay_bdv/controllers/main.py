@@ -180,7 +180,9 @@ class BestpayBDVController(http.Controller):
             
             # 4. Validar API Key contra el Partner (Comercio)
             partner = request.env['res.partner'].sudo().search([
-                ('bdv_telefono_destino', '=', numero_comercio)
+                '|',
+                ('bdv_telefono_destino', '=', numero_comercio),
+                ('bdv_telefono_notificacion', '=', numero_comercio)
             ], limit=1)
             
             api_key_valida = False
