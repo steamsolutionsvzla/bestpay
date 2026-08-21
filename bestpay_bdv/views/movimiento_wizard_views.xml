@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Vista Form del Wizard -->
+    <record id="view_bdv_movimiento_wizard_form" model="ir.ui.view">
+        <field name="name">bestpay_bdv.movimiento.wizard.form</field>
+        <field name="model">bestpay_bdv.movimiento.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Movimientos BDV (Temporal - QA)">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="1"/>
+                            <field name="total_movements" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Movimientos">
+                            <field name="movement_lines" readonly="1">
+                                <list>
+                                    <field name="fecha"/>
+                                    <field name="hora"/>
+                                    <field name="tipo"/>
+                                    <field name="importe"/>
+                                    <field name="saldo"/>
+                                    <field name="referencia"/>
+                                    <field name="descripcion"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="JSON Raw" groups="base.group_system">
+                            <field name="movements_json" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <footer>
+                    <button string="Cerrar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

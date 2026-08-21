@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
+import json
 import logging
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -41,6 +43,31 @@ class ResPartnerBDV(models.Model):
         help="Número de teléfono o cuenta destino del comercio para recibir pagos C2P"
     )
 
+        # === API NOTIFICACIÓN ===
+    bdv_api_key_notification = fields.Char(
+        string="API Key Notificación BDV",
+        help="API Key para recibir notificaciones automáticas de pagos del BDV. "
+             "En QA usar: 97F6F54EF1A84F3A24FE19A3B338C77A",
+        groups="base.group_system",
+        copy=False,
+    )
+
+    bdv_telefono_notificacion = fields.Char(
+        string="Teléfono para Notificación BDV",
+        help="Teléfono que el BDV usará para enviar notificaciones webhook. "
+            "En QA usar: 04141234567",
+        copy=False,
+    )
+
+    # === API CONSULTA DE MOVIMIENTOS ===
+    bdv_api_key_movimientos = fields.Char(
+        string="API Key Consulta Movimientos BDV",
+        help="API Key para consultar movimientos de cuenta en el BDV. "
+             "En QA usar: 256D0FDD36F1B1B3F1208A9B6EC693",
+        groups="base.group_system",
+        copy=False,
+    )
+
         # =================================================================
     # 🔔 CONFIGURACIÓN DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
     # =================================================================
@@ -72,3 +99,58 @@ class ResPartnerBDV(models.Model):
         default=True,
         help="Desmarca para suspender los envíos de webhook a este tercero.",
     )
+
+        # =================================================================
+    # ⚠️ NOTA: MÉTODO TEMPORAL - Usa Wizard TransientModel
+    # =================================================================
+    # Este método es temporal para QA. En producción se migrará a:
+    # - Modelo persistente (bestpay_bdv.movimiento)
+    # - Conciliación automática con payment.transaction
+    # - Historial y reportes
+    # =================================================================
+    
+    def action_bdv_consultar_movimientos(self):
+        self.ensure_one()
+        
+        provider = self.env['payment.provider'].sudo().search([
+            ('code', '=', 'bdv'),
+            ('is_bestpay_provider', '=', True),
+        ], limit=1)
+        
+        if not provider:
+            raise UserError("No hay proveedor BDV configurado en el sistema.")
+        
+        # ==========================================================
+        # CORRECCIÓN DEFINITIVA PARA QA: Usar EXACTAMENTE los datos del PDF
+        # El ambiente Dummy del BDV solo responde con datos de prueba en este rango.
+        # ==========================================================
+        cuenta = '01020501830003283374'
+        fecha_ini = '01/01/2025'
+        fecha_fin = '28/01/2025'
+        
+        resultado = provider.bdv_consultar_movimientos(
+            cuenta=cuenta,
+            fecha_ini=fecha_ini,
+            fecha_fin=fecha_fin,
+            partner=self,
+        )
+        
+        if not resultado.get('success'):
+            raise UserError(f"Error consultando movimientos: {resultado.get('message')}")
+        
+        movements = resultado.get('movements', [])
+        
+        if not movements:
+            raise UserError(f"No hay movimientos de prueba para la cuenta {cuenta} en el rango indicado.")
+        
+        return {
+            'type': 'ir.actions.act_window',
+            'name': f'Movimientos BDV - {self.name} (Prueba QA)',
+            'res_model': 'bestpay_bdv.movimiento.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_partner_id': self.id,
+                'default_movements_json': json.dumps(movements, ensure_ascii=False),
+            }
+        }

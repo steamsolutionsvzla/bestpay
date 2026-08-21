@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import requests  # <-- Esto va SEPARADO, es una librería de Python
 from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
@@ -72,3 +73,89 @@ class PaymentProviderBDV(models.Model):
             'environment': self.bdv_environment or 'qa',
             'test_date': self.bdv_test_date or '',
         }
+
+        # =====================================================
+    # API CONSULTA DE MOVIMIENTOS
+    # =====================================================
+    def bdv_consultar_movimientos(self, cuenta, fecha_ini, fecha_fin, nro_movimiento='', partner=None):
+        """
+        Consulta movimientos de una cuenta en el BDV.
+        """
+        self.ensure_one()
+        import requests
+
+        # 1. Leemos el entorno directamente del provider
+        env_type = self.bdv_environment.strip().lower() if self.bdv_environment else 'qa'
+
+        if env_type == 'qa':
+            api_key = '256D0FDD36F1B1B3F1208A9B6EC693'
+            url = 'https://bdvconciliacionqa.banvenez.com:444/apis/bdv/consulta/movimientos/v2'
+            
+            # 🔥 PAYLOAD EXACTO SEGÚN LA DOCUMENTACIÓN ACTUALIZADA (Pág. 3 del nuevo PDF)
+            # El banco cambió la cuenta de prueba dummy a "01029999999999999999"
+            payload = {
+                "cuenta": "01029999999999999999",  # <-- CAMBIO CRÍTICO: Nueva cuenta dummy
+                "fechaIni": "01/01/2025",
+                "fechaFin": "28/01/2025",
+                "tipoMoneda": "VES",
+                "nroMovimiento": ""  # Se mantiene como string vacío para la 1ra consulta, tal cual el PDF
+            }
+            _logger.info(f"[BDV MOVIMIENTOS] 🟢 QA: Usando payload EXACTO de la documentación actualizada (Cuenta: 01029999999999999999).")
+            
+        else:
+            # PRODUCCIÓN: Lógica dinámica normal
+            api_key = getattr(partner, 'bdv_api_key_movimientos', '') if partner else ''
+            if not api_key:
+                return {'success': False, 'code': '9999', 'message': 'Falta API Key de Movimientos en el comercio.'}
+            
+            url_base = (self.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444').replace('/getMovement/v2', '').rstrip('/')
+            url = f"{url_base}/apis/bdv/consulta/movimientos/v2"
+            
+            payload = {
+                "cuenta": cuenta,
+                "fechaIni": fecha_ini,
+                "fechaFin": fecha_fin,
+                "tipoMoneda": "VES",
+            }
+            if nro_movimiento:
+                payload["nroMovimiento"] = nro_movimiento
+                
+            _logger.info(f"[BDV MOVIMIENTOS] 🔵 Ambiente PRODUCCIÓN detectado.")
+
+        headers = {
+            "X-API-Key": api_key, 
+            "Content-Type": "application/json"
+        }
+        
+        _logger.info(f"[BDV MOVIMIENTOS] Enviando petición a: {url}")
+        _logger.info(f"[BDV MOVIMIENTOS] Payload: {payload}")
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            
+            # Si hay error HTTP, leemos la respuesta REAL del banco
+            if not response.ok:
+                _logger.error(f"🚨 [BDV MOVIMIENTOS] Error HTTP {response.status_code}. Respuesta REAL: {response.text}")
+                return {
+                    'success': False, 
+                    'code': str(response.status_code), 
+                    'message': f'El banco rechazó la petición ({response.status_code}): {response.text}'
+                }
+            
+            respuesta = response.json()
+            
+            if respuesta.get('code') == '1000':
+                data = respuesta.get('data', {})
+                return {
+                    'success': True, 'code': '1000',
+                    'total_of_movements': data.get('totalOfMovements', 0),
+                    'movements': data.get('movs', []),
+                    'has_more': data.get('totalOfMovements', 0) > 100,
+                    'last_nro_movimiento': data.get('movs', [])[-1].get('nroMov') if data.get('movs') else '',
+                }
+            else:
+                return {'success': False, 'code': respuesta.get('code'), 'message': respuesta.get('message')}
+                
+        except Exception as e:
+            _logger.error(f"[BDV MOVIMIENTOS] Error de conexión inesperado: {str(e)}")
+            return {'success': False, 'code': '9999', 'message': f'Error de conexión: {str(e)}'}

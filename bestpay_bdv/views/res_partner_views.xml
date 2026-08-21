@@ -36,6 +36,35 @@
                                        placeholder="Teléfono o Cuenta destino del comercio (C2P)"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
                             </group>
+                            
+                            <!-- GRUPO 3: Notificación (NUEVO)            -->
+                            <group string="Notificación">
+                                <group string="Notificación">
+                                    <field name="bdv_api_key_notification"
+                                        password="True"
+                                        placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                    <field name="bdv_telefono_notificacion"
+                                        placeholder="04141234567"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                </group>
+                            </group>
+
+                            <!-- GRUPO 4: Consulta de Movimientos (NUEVO) -->
+                            <group string="Consulta de Movimientos">
+                                <field name="bdv_api_key_movimientos"
+                                       password="True"
+                                       placeholder="Ej: 256D0FDD36F1B1B3F1208A9B6EC693"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                <!-- Botón para consultar desde Odoo (Uso interno BestPay) -->
+                                <button name="action_bdv_consultar_movimientos" 
+                                        string="🔍 Consultar Movimientos" 
+                                        type="object" 
+                                        class="btn-primary"
+                                        icon="fa-search"
+                                        invisible="not bdv_api_key_movimientos"
+                                        groups="base.group_system"/>
+                            </group>
 
                         </group>
                     </div>

@@ -768,3 +768,110 @@ class PaymentTransactionBDV(models.Model):
             "[BESTPAY WEBHOOK] ⏱️ TX %s reintentará en %d min (intento %d/%d). Error: %s",
             self.id, minutes, attempts, self.MAX_WEBHOOK_ATTEMPTS, error_msg
         )
+
+        # =====================================================
+    # LÓGICA DE PROCESAMIENTO DE NOTIFICACIÓN (WEBHOOK)
+    # Busca por Teléfono del pagador (Recomendación BDV)
+    # =====================================================
+    def bdv_process_notification_webhook(self, payload, partner):
+        """
+        Procesa la notificación del BDV buscando la transacción por el 
+        número de teléfono del pagador (numeroCliente).
+        """
+        # 1. Extraer y normalizar datos
+        telefono_pagador = payload.get('numeroCliente', '').strip()
+        monto_str = payload.get('monto', '0.0')
+        referencia = payload.get('referenciaBancoOrdenante', '').strip()
+        cedula_pagador = payload.get('idCliente', '').strip()
+        banco_origen = payload.get('bancoOrdenante', '').strip()
+        
+        try:
+            monto = float(monto_str)
+        except (ValueError, TypeError):
+            monto = 0.0
+
+        # Normalizar teléfono (asegurar que empiece con 0)
+        if telefono_pagador and not telefono_pagador.startswith('0'):
+            telefono_pagador = '0' + telefono_pagador
+
+        # ==========================================================
+        # BÚSQUEDA PRINCIPAL: Por Teléfono + Monto (Recomendación BDV)
+        # ==========================================================
+        tx = self.search([
+            ('bdv_telefono_pagador', '=', telefono_pagador),
+            ('bdv_importe', '=', monto),
+            ('state', 'in', ['draft', 'pending']),
+        ], limit=1)
+
+        # ==========================================================
+        # ESCENARIO A: Transacción encontrada
+        # ==========================================================
+        if tx:
+            if tx.state == 'done':
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya estaba completada (Duplicado)")
+                return {'codigo': '01'} # Indica al controlador que responda 01
+            
+            # Actualizar con los datos reales del banco y marcar como pagada
+            vals_to_write = {
+                'state': 'done',
+                'bdv_conciliation_state': 'approved',
+                'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+                'bdv_referencia': referencia, # Guardamos la referencia real del banco
+            }
+            if not tx.bdv_banco_origen and banco_origen:
+                vals_to_write['bdv_banco_origen'] = banco_origen
+            
+            # Nota: En pagos interbancarios, el BDV manda "V" + RIF del comercio en idCliente.
+            # Solo guardamos la cédula si parece ser una cédula real de persona natural.
+            if not tx.bdv_cedula_pagador and cedula_pagador and not cedula_pagador.startswith('V'):
+                vals_to_write['bdv_cedula_pagador'] = cedula_pagador
+
+            tx.write(vals_to_write)
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Buscada por Tel: {telefono_pagador})")
+            
+            # Disparar webhook al tercero (Koole/Ecommerce)
+            try:
+                tx._bestpay_trigger_webhook_3ro()
+            except Exception as e:
+                _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook al tercero: {e}")
+            
+            return {'codigo': '00'}
+
+        # ==========================================================
+        # ESCENARIO B: Pago Directo (No existe en Odoo)
+        # Crear transacción en 'draft' para conciliación manual posterior
+        # ==========================================================
+        _logger.warning(f"[BDV NOTIFICACIÓN] ️ Pago directo detectado. Creando TX en draft. Tel: {telefono_pagador}, Monto: {monto}")
+        
+        # Buscar el proveedor BDV por defecto
+        provider = self.env['payment.provider'].sudo().search([
+            ('code', '=', 'bdv'),
+            ('is_bestpay_provider', '=', True),
+        ], limit=1)
+        
+        # Buscar moneda VES
+        currency_ves = self.env['res.currency'].sudo().search([('name', '=', 'VES')], limit=1)
+
+        try:
+            new_tx = self.create({
+                'provider_id': provider.id if provider else False,
+                'partner_id': partner.id if partner else False, # El comercio que recibió el dinero
+                'amount': monto,
+                'currency_id': currency_ves.id if currency_ves else False,
+                'amount_ves': monto,
+                'state': 'draft',
+                'bdv_conciliation_state': 'draft',
+                'bdv_conciliation_message': 'Creado automáticamente por Webhook (Pago Directo)',
+                'bdv_referencia': referencia,
+                'bdv_importe': monto,
+                'bdv_telefono_pagador': telefono_pagador,
+                'bdv_banco_origen': banco_origen,
+                'bdv_cedula_pagador': cedula_pagador if cedula_pagador else '', 
+                'client_note': f"Pago directo notificado por BDV. Teléfono pagador: {telefono_pagador}",
+            })
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ Transacción en draft creada exitosamente: ID {new_tx.id}")
+            return {'codigo': '00'}
+            
+        except Exception as e:
+            _logger.error(f"[BDV NOTIFICACIÓN] ❌ Error creando transacción en draft: {e}", exc_info=True)
+            return {'codigo': '00'}

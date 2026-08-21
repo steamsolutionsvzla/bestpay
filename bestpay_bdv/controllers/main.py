@@ -145,42 +145,91 @@ class BestpayBDVController(http.Controller):
                 'message': 'Ocurrió un error inesperado al procesar el pago.'
             })
     
-        # =====================================================
+
+    # =====================================================
     # 4. WEBHOOK: NOTIFICACIÓN DEL BANCO (Server-to-Server)
     # =====================================================
-    @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST'], csrf=False)
+    @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def bdv_webhook_notify(self, **post):
         """
-        Endpoint para recibir notificaciones automáticas del BDV sobre el estado de un pago.
+        Endpoint para recibir notificaciones automáticas del BDV.
+        Incluye headers CORS para permitir peticiones desde herramientas web (Hoppscotch, BDV QA).
         """
-        try:
-            # Registrar TODO lo que nos envía el banco para auditoría y pruebas
-            raw_data = request.httprequest.data.decode('utf-8')
-            _logger.info("="*50)
-            _logger.info("[BDV WEBHOOK] Notificación recibida del Banco de Venezuela")
-            _logger.info(f"[BDV WEBHOOK] Headers: {dict(request.httprequest.headers)}")
-            _logger.info(f"[BDV WEBHOOK] Body (Raw): {raw_data}")
-            _logger.info(f"[BDV WEBHOOK] Form Data: {post}")
-            _logger.info("="*50)
+        # Headers CORS obligatorios para que los navegadores no bloqueen la respuesta
+        cors_headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'API-Key, Content-Type, Accept',
+        }
 
-            # Aquí puedes agregar la lógica para buscar la transacción por referencia 
-            # y cambiar su estado a 'done' si el banco confirma el pago.
-            # Ejemplo básico de respuesta exitosa al banco:
+        # Si el navegador envía una petición OPTIONS (preflight), respondemos 200 inmediatamente
+        if request.httprequest.method == 'OPTIONS':
+            return Response('', status=200, headers=cors_headers)
+
+        try:
+            raw_data = request.httprequest.data.decode('utf-8')
+            _logger.info(f"[BDV NOTIFICACIÓN] Webhook recibido. Body: {raw_data}")
             
-            return Response(
-                json.dumps({"status": "success", "message": "Notificación recibida correctamente"}),
-                status=200,
-                content_type='application/json'
-            )
+            # 1. Validar API-KEY del header
+            api_key_header = request.httprequest.headers.get('API-KEY', '').strip()
+            if not api_key_header:
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
+                    status=200, content_type='application/json', headers=cors_headers
+                )
+
+            # 2. Parsear JSON
+            try:
+                payload = json.loads(raw_data)
+            except json.JSONDecodeError:
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "JSON inválido", "mensajeSistema": "Error al parsear"}),
+                    status=200, content_type='application/json', headers=cors_headers
+                )
+
+            # 3. Identificar el comercio receptor
+            numero_comercio = payload.get('numeroComercio', '')
+            
+            # 4. Validar API Key contra el Partner (Comercio)
+            partner = request.env['res.partner'].sudo().search([
+                '|',
+                ('bdv_telefono_destino', '=', numero_comercio),
+                ('bdv_telefono_notificacion', '=', numero_comercio)
+            ], limit=1)
+            
+            api_key_valida = False
+            if partner and partner.bdv_api_key_notification:
+                api_key_valida = (api_key_header == partner.bdv_api_key_notification)
+            else:
+                # Respaldo para QA
+                api_key_valida = (api_key_header == '97F6F54EF1A84F3A24FE19A3B338C77A')
+
+            if not api_key_valida:
+                return Response(
+                    json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
+                    status=200, content_type='application/json', headers=cors_headers
+                )
+
+            # 5. Delegar la lógica de negocio al modelo (Búsqueda por Teléfono)
+            resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
+
+            # 6. Responder al BDV
+            if resultado['codigo'] == '01':
+                return Response(
+                    json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
+                    status=200, content_type='application/json', headers=cors_headers
+                )
+            else:
+                return Response(
+                    json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
+                    status=200, content_type='application/json', headers=cors_headers
+                )
 
         except Exception as e:
-            _logger.error(f"[BDV WEBHOOK] Error procesando notificación: {str(e)}", exc_info=True)
-            # Siempre devolver 200 al banco para que no siga reintentando, 
-            # aunque haya fallado nuestro procesamiento interno.
+            _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
             return Response(
-                json.dumps({"status": "error", "message": "Error interno, pero recibido"}),
-                status=200,
-                content_type='application/json'
+                json.dumps({"codigo": "00", "mensajeCliente": "Error interno", "mensajeSistema": "Notificación recibida con error"}),
+                status=200, content_type='application/json', headers=cors_headers
             )
 
     # =====================================================
@@ -321,3 +370,66 @@ class BestpayBDVController(http.Controller):
         except Exception as e:
             _logger.error(f"[BDV C2P Process] Error inesperado: {str(e)}", exc_info=True)
             return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}
+    
+        # =====================================================
+    # 7. API CONSULTA DE MOVIMIENTOS BDV (Proxy para E-commerce)
+    # =====================================================
+    @http.route('/api/bestpay/v1/bdv/consulta/movimientos', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def bdv_consultar_movimientos_api(self, **kwargs):
+        """
+        Endpoint REST para que el e-commerce consulte sus movimientos bancarios.
+        """
+        # 1. Validar credenciales M2M (Basic Auth)
+        auth_header = request.httprequest.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            return {'status': 'error', 'message': 'Autenticación requerida (Basic Auth).'}
+        
+        try:
+            import base64, binascii
+            encoded_token = auth_header[6:].strip()
+            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
+            if ':' not in decoded_credentials: raise ValueError('Formato inválido')
+        except Exception:
+            return {'status': 'error', 'message': 'Credenciales Basic malformadas.'}
+        
+        if not request.db:
+            return {'status': 'error', 'message': 'Base de datos no especificada.'}
+        
+        # 2. Validar cliente API
+        partner = request.env['res.partner'].sudo().search([
+            ('is_api_client', '=', True),
+            ('bestpay_basic_token', '=', encoded_token),
+        ], limit=1)
+        if not partner:
+            return {'status': 'error', 'message': 'Credenciales inválidas o cliente no autorizado.'}
+        
+        # 3. Leer y validar parámetros
+        cuenta = kwargs.get('cuenta')
+        fecha_ini = kwargs.get('fecha_ini')
+        fecha_fin = kwargs.get('fecha_fin')
+        nro_movimiento = kwargs.get('nro_movimiento', '')
+        
+        if not all([cuenta, fecha_ini, fecha_fin]):
+            return {'status': 'error', 'message': 'Faltan campos obligatorios: cuenta, fecha_ini, fecha_fin.'}
+        
+        # 4. Buscar proveedor BDV autorizado
+        provider = request.env['payment.provider'].sudo().search([
+            ('code', '=', 'bdv'), ('is_bestpay_provider', '=', True),
+            ('id', 'in', partner.allowed_provider_ids.ids),
+        ], limit=1)
+        if not provider:
+            return {'status': 'error', 'message': 'Proveedor BDV no autorizado para este cliente.'}
+        
+        # 5. Ejecutar consulta
+        try:
+            resultado = provider.bdv_consultar_movimientos(
+                cuenta=cuenta, fecha_ini=fecha_ini, fecha_fin=fecha_fin, 
+                nro_movimiento=nro_movimiento, partner=partner
+            )
+            if resultado.get('success'):
+                return {'status': 'success', 'data': resultado}
+            else:
+                return {'status': 'error', 'message': resultado.get('message')}
+        except Exception as e:
+            _logger.error(f"[BDV MOVIMIENTOS API] Error: {str(e)}")
+            return {'status': 'error', 'message': f'Error interno: {str(e)}'}
