@@ -145,15 +145,27 @@ class BestpayBDVController(http.Controller):
                 'message': 'Ocurrió un error inesperado al procesar el pago.'
             })
     
-        # =====================================================
+
+    # =====================================================
     # 4. WEBHOOK: NOTIFICACIÓN DEL BANCO (Server-to-Server)
     # =====================================================
-    @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST'], csrf=False)
+    @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def bdv_webhook_notify(self, **post):
         """
         Endpoint para recibir notificaciones automáticas del BDV.
-        Busca la transacción por el TELÉFONO del pagador (recomendación del BDV).
+        Incluye headers CORS para permitir peticiones desde herramientas web (Hoppscotch, BDV QA).
         """
+        # Headers CORS obligatorios para que los navegadores no bloqueen la respuesta
+        cors_headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'API-Key, Content-Type, Accept',
+        }
+
+        # Si el navegador envía una petición OPTIONS (preflight), respondemos 200 inmediatamente
+        if request.httprequest.method == 'OPTIONS':
+            return Response('', status=200, headers=cors_headers)
+
         try:
             raw_data = request.httprequest.data.decode('utf-8')
             _logger.info(f"[BDV NOTIFICACIÓN] Webhook recibido. Body: {raw_data}")
@@ -163,7 +175,7 @@ class BestpayBDVController(http.Controller):
             if not api_key_header:
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
-                    status=200, content_type='application/json'
+                    status=200, content_type='application/json', headers=cors_headers
                 )
 
             # 2. Parsear JSON
@@ -172,7 +184,7 @@ class BestpayBDVController(http.Controller):
             except json.JSONDecodeError:
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "JSON inválido", "mensajeSistema": "Error al parsear"}),
-                    status=200, content_type='application/json'
+                    status=200, content_type='application/json', headers=cors_headers
                 )
 
             # 3. Identificar el comercio receptor
@@ -195,7 +207,7 @@ class BestpayBDVController(http.Controller):
             if not api_key_valida:
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
-                    status=200, content_type='application/json'
+                    status=200, content_type='application/json', headers=cors_headers
                 )
 
             # 5. Delegar la lógica de negocio al modelo (Búsqueda por Teléfono)
@@ -205,19 +217,19 @@ class BestpayBDVController(http.Controller):
             if resultado['codigo'] == '01':
                 return Response(
                     json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
-                    status=200, content_type='application/json'
+                    status=200, content_type='application/json', headers=cors_headers
                 )
             else:
                 return Response(
                     json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
-                    status=200, content_type='application/json'
+                    status=200, content_type='application/json', headers=cors_headers
                 )
 
         except Exception as e:
             _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
             return Response(
                 json.dumps({"codigo": "00", "mensajeCliente": "Error interno", "mensajeSistema": "Notificación recibida con error"}),
-                status=200, content_type='application/json'
+                status=200, content_type='application/json', headers=cors_headers
             )
 
     # =====================================================
