@@ -226,7 +226,7 @@ class PaymentTransaction(models.Model):
         
         final_return_url = self.return_url_3ro or partner.default_return_url_3ro or f"{base_url}/payment/mercantil/processing"
 
-        return {
+        transaction_data = {
             "amount": float(self.amount_ves),
             "customerName": self.partner_id.name or partner.name or "Cliente General",
             "returnUrl": final_return_url,
@@ -244,6 +244,10 @@ class PaymentTransaction(models.Model):
             "currency": "VES",
             "paymentConcepts": payment_concepts
         }
+
+        _logger.info("=== TRANSACTION DATA (REQUEST) FOR MERCANTIL ===")
+        _logger.info(json.dumps(transaction_data, indent=4, ensure_ascii=False))
+        return transaction_data
 
     def _encrypt_transaction_data(self):
         """
