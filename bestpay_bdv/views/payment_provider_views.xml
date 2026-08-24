@@ -15,12 +15,16 @@
                         <group>
                             <!-- NOTA: bdv_api_key se movió a res.partner -->
                             <field name="bdv_api_url" 
-                                   placeholder="https://bdvconciliacionqa.banvenez.com:444/getMovement/v2"/>
+                                invisible="bdv_environment != 'qa'"
+                                placeholder="https://bdvconciliacionqa.banvenez.com:444/getMovement/v2"/>
+                            <field name="bdv_api_url_prod" 
+                                invisible="bdv_environment != 'prod'"
+                                placeholder="https://bdvconciliacion.banvenez.com/getMovement"/>
                         </group>
                         <group>
                             <!-- NOTA: bdv_telefono_destino se movió a res.partner -->
                             <field name="bdv_environment"/>
-                            <field name="bdv_test_date"/>
+                            <field name="bdv_test_date" invisible="bdv_environment != 'qa'"/>
                         </group>
                     </group>
                 </xpath>

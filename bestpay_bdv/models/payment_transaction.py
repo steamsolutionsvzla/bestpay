@@ -180,31 +180,36 @@ class PaymentTransactionBDV(models.Model):
         """
         self.ensure_one()
         provider = self.provider_id
-
         if provider.code != 'bdv':
             raise UserError("Este método solo aplica para el proveedor BDV.")
 
         # 1. Obtener credenciales del provider, pasando el partner (comercio)
-        # para que tome la API Key y teléfono destino del partner, no del provider
         creds = provider.bdv_get_api_credentials(partner=self.partner_id)
-        
         if not creds['api_key']:
             raise UserError("Falta configurar la API Key del BDV en el proveedor de pago.")
 
         # 2. Construir el payload que pide el BDV
-        # Usar fecha de prueba si está configurada, sino usar fecha actual
-        test_date = creds.get('test_date')
-        fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
-        
+        # CORRECCIÓN CRÍTICA: Forzar fecha real en Producción
+        env_type = creds.get('environment', 'qa')
+        if env_type == 'prod':
+            # En PRODUCCIÓN: Ignorar test_date y usar la fecha real del pago o la de hoy
+            fecha_pago = str(self.bdv_fecha_pago or fields.Date.today())
+            _logger.info(f"[BDV] 🔵 PRODUCCIÓN: Usando fecha real: {fecha_pago}")
+        else:
+            # En QA: Usar la fecha de prueba si existe
+            test_date = creds.get('test_date')
+            fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
+            _logger.info(f"[BDV] 🟢 QA: Usando fecha: {fecha_pago}")
+
         payload = {
             "cedulaPagador": self.bdv_cedula_pagador or '',
             "telefonoPagador": self.bdv_telefono_pagador or '',
             "telefonoDestino": creds['telefono_destino'],
             "referencia": self.bdv_referencia or '',
-            "fechaPago": fecha_pago,  # ← CAMBIAR ESTA LÍNEA
+            "fechaPago": fecha_pago,  # ← AHORA USARÁ LA VARIABLE CORREGIDA
             "importe": f"{self.bdv_importe:.2f}",
             "bancoOrigen": self.bdv_banco_origen or '',
-            "reqCed": self.bdv_req_ced,
+            "reqCed": self.bdv_req_ced, # ← ASEGÚRATE DE QUE ESTO ESTÉ MARCADO EN ODOO
         }
 
         headers = {
@@ -230,7 +235,6 @@ class PaymentTransactionBDV(models.Model):
             )
             response.raise_for_status()
             respuesta = response.json()
-
             _logger.info(f"[BDV] Respuesta recibida: {respuesta}")
 
             # 5. Guardar la respuesta cruda
@@ -246,46 +250,34 @@ class PaymentTransactionBDV(models.Model):
                     'bdv_conciliation_state': 'approved',
                     'bdv_conciliation_message': message,
                     'state': 'done',
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
-                 # 🔔 Disparar webhook al tercero (asíncrono, lo procesa el cron)
                 self._bestpay_trigger_webhook_3ro()
                 return True
-
             elif code == 1010:
                 # ❌ PAGO RECHAZADO
                 self.write({
                     'bdv_conciliation_state': 'rejected',
                     'bdv_conciliation_message': message,
                     'state': 'cancel',
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {message}")
                 return False
-
             else:
                 # ⚠️ CÓDIGO DESCONOCIDO
                 self.write({
                     'bdv_conciliation_state': 'error',
                     'bdv_conciliation_message': f"Código inesperado: {code} - {message}",
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
                 return False
 
         except requests.exceptions.RequestException as e:
-            # ❌ ERROR DE CONEXIÓN - Sin simulación, solo registro del error
             _logger.error(f"[BDV] Error de conexión: {str(e)}")
-            
             self.write({
                 'bdv_conciliation_state': 'error',
                 'bdv_conciliation_message': f"Error de conexión: {str(e)}",
                 'state': 'error',
-                'bank_in_log': json.dumps({
-                    'error': str(e),
-                    'payload_sent': payload,
-                }, indent=2, ensure_ascii=False),
             })
             raise UserError(f"Error de conexión con el BDV: {str(e)}")
     

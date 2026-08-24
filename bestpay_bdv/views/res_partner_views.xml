@@ -15,12 +15,16 @@
                     <div invisible="not allowed_provider_ids or %(bestpay_bdv.payment_provider_bdv)d not in allowed_provider_ids">
                         <group string="Credenciales del Banco de Venezuela">
                             
-                            <!-- GRUPO 1: Pago Móvil (Existente) -->
+                                                        <!-- GRUPO 1: Pago Móvil (Existente) -->
                             <group string="Pago Móvil">
                                 <field name="bdv_api_key"
+                                       string="API Key BDV (QA)"
                                        password="True"
-                                       placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                       placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"/>
+                                <field name="bdv_api_key_prod"
+                                       string="API Key BDV (Producción)"
+                                       password="True"
+                                       placeholder="Ej: 34F2AE8C4FBF39C5A031348C84F21D9A"/>
                                 <field name="bdv_telefono_destino"
                                        placeholder="04127141363"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>

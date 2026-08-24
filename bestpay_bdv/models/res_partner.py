@@ -19,9 +19,15 @@ class ResPartnerBDV(models.Model):
     # deben vivir en el partner (cliente).
 
     bdv_api_key = fields.Char(
-        string="API Key BDV (Comercio)",
-        help="Clave de autenticación proporcionada por el Banco de Venezuela a este comercio específico.",
-        groups="base.group_system",  # Solo admins la ven
+    string="API Key BDV (QA)",
+    help="Clave de autenticación del ambiente de calidad (dummy) proporcionada por el BDV.",
+    groups="base.group_system",
+    copy=False,
+    )
+    bdv_api_key_prod = fields.Char(
+        string="API Key BDV (Producción)",
+        help="Clave de autenticación del ambiente de producción (generada desde BDVenlínea Empresas).",
+        groups="base.group_system",
         copy=False,
     )
 

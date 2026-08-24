@@ -23,9 +23,14 @@ class PaymentProviderBDV(models.Model):
     # CAMPOS ESPECÍFICOS DEL BANCO DE VENEZUELA
     # =====================================================
     bdv_api_url = fields.Char(
-        string="URL API BDV",
-        help="Endpoint de la API de conciliación del BDV.",
+        string="URL API BDV (QA)",
+        help="Endpoint de la API de conciliación del BDV para ambiente QA.",
         default="https://bdvconciliacionqa.banvenez.com:444/getMovement/v2",
+    )
+    bdv_api_url_prod = fields.Char(
+        string="URL API BDV (Producción)",
+        help="Endpoint de la API de conciliación del BDV para ambiente Producción.",
+        default="https://bdvconciliacion.banvenez.com/getMovement",
     )
 
     bdv_environment = fields.Selection(
@@ -50,30 +55,35 @@ class PaymentProviderBDV(models.Model):
     def bdv_get_api_credentials(self, partner=None):
         """
         Devuelve las credenciales configuradas para el BDV.
-        Ahora la API Key y el teléfono destino vienen del partner (comercio),
-        no del provider.
-        
+        La API Key viene del partner según el ambiente (QA o Producción).
+        El teléfono destino viene del partner (comercio).
         :param partner: res.partner record (el comercio/cliente)
         :return: dict con las credenciales
         """
         self.ensure_one()
         
-        # Obtener API Key y teléfono del partner si se proporciona
-        api_key = ''
+        # Teléfono destino del partner (comercio) - siempre el mismo
         telefono_destino = ''
-        
         if partner:
-            api_key = getattr(partner, 'bdv_api_key', '') or ''
             telefono_destino = getattr(partner, 'bdv_telefono_destino', '') or ''
+        
+        # Seleccionar API Key y URL según el ambiente configurado en el provider
+        if self.bdv_environment == 'prod':
+            # PRODUCCIÓN: usar URL de producción y API Key de producción del partner
+            api_key = getattr(partner, 'bdv_api_key_prod', '') if partner else ''
+            api_url = 'https://bdvconciliacion.banvenez.com/getMovement'
+        else:
+            # QA: usar URL de QA y API Key de QA del partner
+            api_key = getattr(partner, 'bdv_api_key', '') if partner else ''
+            api_url = self.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444/getMovement/v2'
         
         return {
             'api_key': api_key,
-            'api_url': self.bdv_api_url or '',
+            'api_url': api_url,
             'telefono_destino': telefono_destino,
             'environment': self.bdv_environment or 'qa',
             'test_date': self.bdv_test_date or '',
         }
-
         # =====================================================
     # API CONSULTA DE MOVIMIENTOS
     # =====================================================
