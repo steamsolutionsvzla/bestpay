@@ -334,7 +334,7 @@ class PaymentTransaction(models.Model):
             "bank_reference": self.acquirer_reference or '',
         }
 
-        payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+        payload_json = json.dumps(payload, ensure_ascii=False, indent=4)
         status_code = None
         success = False
 
