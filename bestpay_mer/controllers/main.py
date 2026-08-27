@@ -228,7 +228,7 @@ class BestPayWebhookController(http.Controller):
 
             # 5. Guardar cada log en su campo correspondiente
             tx.write({
-                'acquirer_reference': webhook_info.get('referencia'),
+                # 'acquirer_reference': webhook_info.get('referencia'),
                 'provider_reference': guid,
                 'bank_in_log': incoming_raw_json,
                 'bank_out_log': outgoing_response_json,

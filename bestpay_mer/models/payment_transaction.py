@@ -331,7 +331,7 @@ class PaymentTransaction(models.Model):
             "currency": self.currency_id.name,
             "amount_ves": self.amount_ves,
             "exchange_rate": self.exchange_rate_bcv,
-            "bank_reference": self.acquirer_reference or '',
+            # "bank_reference": self.acquirer_reference or '',
         }
 
         payload_json = json.dumps(payload, ensure_ascii=False, indent=4)
