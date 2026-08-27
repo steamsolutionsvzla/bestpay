@@ -15,15 +15,17 @@
                 <field name="payment_link_bank_mer" widget="CopyClipboardURL" readonly="1" invisible="provider_code != 'mer'"/>
             </xpath>
             <xpath expr="//group[@name='technical_logs']" position="inside">
-                <label for="webhook_3ro_state" string="Notificación al Tercero" class="mt-3" invisible="not webhook_3ro_state or webhook_3ro_state == 'na'"/>
-                <div invisible="not webhook_3ro_state or webhook_3ro_state == 'na'">
-                    <field name="webhook_3ro_state" class="oe_inline" widget="badge"
-                           decoration-success="webhook_3ro_state == 'sent'"
-                           decoration-warning="webhook_3ro_state == 'pending'"
-                           decoration-danger="webhook_3ro_state == 'failed'"/>
-                    <button name="action_retry_webhook_3ro" string="Reintentar ahora"
-                            type="object" class="btn-warning btn-sm ms-2"
-                            invisible="webhook_3ro_state not in ('pending', 'failed')"/>
+                <div colspan="2" class="row mt-3" invisible="not webhook_3ro_state or webhook_3ro_state == 'na'">
+                    <label for="webhook_3ro_state" string="Notificación al Tercero" class="col-sm-3 col-form-label fw-bold"/>
+                    <div class="col-sm-9 d-flex align-items-center">
+                        <field name="webhook_3ro_state" class="oe_inline" widget="badge" 
+                            decoration-success="webhook_3ro_state == 'sent'" 
+                            decoration-warning="webhook_3ro_state == 'pending'" 
+                            decoration-danger="webhook_3ro_state == 'failed'"/>
+                        <button name="action_retry_webhook_3ro" string="Reintentar ahora" type="object" 
+                                class="btn-warning btn-sm ms-2" 
+                                invisible="webhook_3ro_state not in ('pending', 'failed')"/>
+                    </div>
                 </div>
                 <field name="webhook_3ro_attempts" invisible="not webhook_3ro_attempts"/>
                 <field name="webhook_3ro_next_retry" invisible="webhook_3ro_state != 'pending'"/>
