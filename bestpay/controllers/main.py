@@ -239,5 +239,5 @@ class BestPayApiController(http.Controller):
             'flow_type': tx.bestpay_flow_type,
             'payment_details': datos_banco
         }
-        tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False)})
+        tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False, indent=4)})
         return response
