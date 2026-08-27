@@ -103,14 +103,45 @@ class BestpayBDVController(http.Controller):
         # =====================================================
         # =====================================================
 
+        # =====================================================
+        # PROCESAR FECHA DEL PAGO
+        # =====================================================
+        fecha_pago_str = post.get('fecha_pago', '')
+        try:
+            from datetime import datetime
+            # Convertir string a date object
+            fecha_pago = datetime.strptime(fecha_pago_str, '%Y-%m-%d').date()
+            
+            # Validar que no sea mayor a 3 días atrás (regla del BDV)
+            hoy = fields.Date.today()
+            dias_diferencia = (hoy - fecha_pago).days
+            
+            if dias_diferencia < 0:
+                raise UserError("La fecha del pago no puede ser futura.")
+            elif dias_diferencia > 3:
+                raise UserError("El BDV solo permite conciliar pagos de los últimos 3 días. "
+                              f"Fecha del pago: {fecha_pago.strftime('%d/%m/%Y')}. "
+                              f"Hoy es: {hoy.strftime('%d/%m/%Y')}.")
+            
+            _logger.info(f"[BDV] Fecha del pago validada: {fecha_pago} ({dias_diferencia} días atrás)")
+            
+        except ValueError:
+            raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")
+        except UserError:
+            raise
+        except Exception as e:
+            _logger.error(f"[BDV] Error procesando fecha: {str(e)}")
+            raise UserError("Error al procesar la fecha del pago.")
+        # =====================================================
+
         # Actualizar la transacción con los datos del pagador y el monto determinado
         transaction.write({
             'bdv_cedula_pagador': cedula,
             'bdv_telefono_pagador': telefono_pagador,
             'bdv_banco_origen': post.get('banco', '0102'),
             'bdv_referencia': post.get('referencia', ''),
-            'bdv_fecha_pago': fields.Date.today(),
-            'bdv_importe': importe_float,  # ← Se usa el monto calculado con seguridad
+            'bdv_fecha_pago': fecha_pago,  # ← AHORA USA LA FECHA DEL FORMULARIO
+            'bdv_importe': importe_float,
         })
 
         # Llamar al método de conciliación (el que creamos en el modelo)

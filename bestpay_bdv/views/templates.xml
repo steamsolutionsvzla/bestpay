@@ -191,6 +191,16 @@
                                                        required="1"/>
                                                 <small class="text-muted">Lo encuentras en tu comprobante de pago móvil</small>
                                             </div>
+                                            
+                                            <!-- Fecha del Pago -->
+                                            <div class="mb-3">
+                                                <label class="form-label">Fecha del Pago</label>
+                                                <input type="date" 
+                                                    class="form-control" 
+                                                    name="fecha_pago" 
+                                                    required="1"/>
+                                                <small class="text-muted">Fecha exacta en que realizaste el pago móvil</small>
+                                            </div>
 
                                             <!-- Botones -->
                                             <div class="d-grid gap-2">
