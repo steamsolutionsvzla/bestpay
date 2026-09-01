@@ -44,10 +44,26 @@ class BestpayBDVController(http.Controller):
                 'hash': hash,
             })
         else:
-            # Renderiza el formulario VIEJO de Pago Móvil (intacto)
+            # --- 🎨 DATOS DEL COMERCIO PARA EL CHECKOUT ---
+            partner = transaction.partner_id  # ← ESTA LÍNEA ES LA QUE FALTABA
+            
+            comercio_data = {
+                'nombre': partner.bestpay_checkout_title or partner.name or 'Comercio',
+                'rif': partner.vat or '',
+                'logo_url': f"/web/image/res.partner/{partner.id}/image_1920" if partner.image_1920 else False,
+                'telefono_destino': getattr(partner, 'bdv_telefono_destino', '') or '',
+                'mensaje': partner.bestpay_checkout_message or '',
+                'color': partner.bestpay_checkout_primary_color or '#0033a0',
+                'pagomovil_telefono': partner.bestpay_pagomovil_telefono or '',
+                'pagomovil_rif': partner.bestpay_pagomovil_rif or '',
+                'pagomovil_banco': partner.bestpay_pagomovil_banco or '',
+            }
+            
+            # Renderiza el formulario de Pago Móvil
             return request.render('bestpay_bdv.bdv_checkout_form', {
                 'transaction': transaction,
                 'hash': hash,
+                'comercio': comercio_data,
             })
 
     # =====================================================

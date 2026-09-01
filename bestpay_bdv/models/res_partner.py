@@ -106,6 +106,38 @@ class ResPartnerBDV(models.Model):
         help="Desmarca para suspender los envíos de webhook a este tercero.",
     )
 
+        # =====================================================
+    # 🎨 DATOS DE PRESENTACIÓN AL CLIENTE FINAL (CHECKOUT BDV) CONCILIACION
+    # =====================================================
+    bestpay_checkout_title = fields.Char(
+        string="Título del Checkout",
+        help="Nombre comercial que se muestra al pagador en la página de pago. Si está vacío, se usa el nombre del contacto.",
+    )
+    bestpay_checkout_message = fields.Html(
+        string="Mensaje de Instrucciones",
+        help="Mensaje personalizado (HTML) que aparece antes del formulario. Ej: 'Realice el Pago Móvil y luego registre los datos abajo.'",
+    )
+    bestpay_checkout_primary_color = fields.Char(
+        string="Color de Marca",
+        default="#0033a0",  # Azul BDV por defecto para que combine con tu CSS
+        help="Color hexadecimal principal para el checkout (bordes, detalles, etc).",
+    )
+
+        # =====================================================
+    #  DATOS DE PAGO MÓVIL (Para mostrar en checkout)
+    # =====================================================
+    bestpay_pagomovil_telefono = fields.Char(
+        string="Teléfono Pago Móvil",
+        help="Número de teléfono para recibir pagos móviles (se mostrará en el checkout).",
+    )
+    bestpay_pagomovil_rif = fields.Char(
+        string="RIF Pago Móvil",
+        help="RIF del comercio para pagos móviles (se mostrará en el checkout).",
+    )
+    bestpay_pagomovil_banco = fields.Char(
+        string="Banco Pago Móvil",
+        help="Banco del comercio para pagos móviles (ej: Banco de Venezuela).",
+    )
         # =================================================================
     # ⚠️ NOTA: MÉTODO TEMPORAL - Usa Wizard TransientModel
     # =================================================================

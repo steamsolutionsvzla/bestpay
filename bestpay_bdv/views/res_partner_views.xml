@@ -95,6 +95,35 @@
                         </group>
                     </group>
 
+                    <!-- 🎨 DATOS DE PRESENTACIÓN EN CHECKOUT (NUEVO) -->
+                    <group string="Presentación en Checkout (Pago Móvil)" invisible="not is_api_client">
+                        <group>
+                            <field name="bestpay_checkout_title" 
+                                   placeholder="Ej: Mi Tienda Online (se usa el nombre del contacto si se deja vacío)"/>
+                            <field name="bestpay_checkout_primary_color" 
+                                   widget="color" 
+                                   placeholder="#0033a0"/>
+                        </group>
+                        <group>
+                            <field name="bestpay_checkout_message" 
+                                   widget="html" 
+                                   options="{'safe': True, 'codeview': True}"
+                                   placeholder="Ej: &lt;b&gt;Atención:&lt;/b&gt; Realice el Pago Móvil al teléfono que aparece abajo y luego registre los datos en este formulario."/>
+                        </group>
+
+                        <!-- 📱 DATOS DE PAGO MÓVIL (NUEVO) -->
+                        <group string="Datos de Pago Móvil (Checkout)" invisible="not is_api_client">
+                            <group>
+                                <field name="bestpay_pagomovil_telefono" 
+                                    placeholder="04161234567"/>
+                                <field name="bestpay_pagomovil_rif" 
+                                    placeholder="J-123456789"/>
+                                <field name="bestpay_pagomovil_banco" 
+                                    placeholder="Banco de Venezuela"/>
+                            </group>
+                        </group>
+                    </group>
+
                 </page>
             </xpath>
         </field>

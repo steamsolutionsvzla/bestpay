@@ -118,6 +118,163 @@
                                             </p>
                                         </t>
                                     </div>
+                                        <!-- 🎨 MODAL DE INFORMACIÓN DEL COMERCIO (Emergente) -->
+                                        <t t-if="comercio">
+                                            <div id="comercioModal" class="modal fade show" 
+                                                 style="display:block; background:rgba(0,0,0,0.7); backdrop-filter:blur(6px);" 
+                                                 data-bs-backdrop="static" tabindex="-1" role="dialog">
+                                                <div class="modal-dialog modal-dialog-centered" role="document">
+                                                    <div class="modal-content" style="border-radius:20px; border:none; box-shadow:0 25px 70px rgba(0,0,0,0.5);">
+                                                        
+                                                        <!-- Header estilo BDV (Azul con línea dorada) -->
+                                                        <div class="modal-header" 
+                                                             style="background:linear-gradient(135deg, #0033a0 0%, #002270 100%); 
+                                                                    border-radius:20px 20px 0 0 !important; border-bottom:5px solid #ffd700; padding:1.5rem;">
+                                                            <h4 class="modal-title fw-bold text-white">
+                                                                <i class="fa fa-store me-2"></i>Información del Comercio
+                                                            </h4>
+                                                            <button type="button" class="btn-close btn-close-white" 
+                                                                    onclick="bpCloseComercioModal()" 
+                                                                    aria-label="Close"
+                                                                    style="opacity:0.9; filter:brightness(1.2);"></button>
+                                                        </div>
+
+                                                        <div class="modal-body p-4 p-md-5">
+                                                            <!-- Logo + Nombre del Comercio -->
+                                                            <div class="text-center mb-4">
+                                                                <t t-if="comercio.get('logo_url')">
+                                                                    <img t-att-src="comercio['logo_url']" alt="Logo" 
+                                                                         class="rounded-circle mb-3" 
+                                                                         style="width:100px; height:100px; object-fit:cover; border:5px solid #0033a0; box-shadow:0 4px 12px rgba(0,51,160,0.3);"/>
+                                                                </t>
+                                                                <h3 class="fw-bold text-dark mb-2" style="color:#0033a0;">
+                                                                    <t t-esc="comercio.get('nombre', 'Comercio')"/>
+                                                                </h3>
+                                                                <p t-if="comercio.get('rif')" class="text-muted mb-0 small">
+                                                                    <i class="fa fa-id-card me-1"></i>RIF: <strong><t t-esc="comercio['rif']"/></strong>
+                                                                </p>
+                                                            </div>
+
+                                                            <!-- Monto a pagar (Destacado) -->
+                                                            <div class="bg-light rounded p-4 mb-4 text-center" 
+                                                                 style="border:2px solid #e9ecef; box-shadow:inset 0 2px 4px rgba(0,0,0,0.05);">
+                                                                <p class="text-muted small text-uppercase fw-bold mb-2">Monto a Pagar</p>
+                                                                <h2 class="text-success mb-0" style="font-size:2.8rem; font-weight:800;">
+                                                                    <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> 
+                                                                    <span style="font-size:1.2rem; vertical-align:super; color:#28a745;">Bs</span>
+                                                                </h2>
+                                                                <t t-if="transaction.exchange_rate_bcv">
+                                                                    <p class="text-muted small mt-2 mb-0">
+                                                                        <i class="fa fa-info-circle me-1"></i>
+                                                                        Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$
+                                                                    </p>
+                                                                </t>
+                                                            </div>
+
+                                                            <!-- 📱 DATOS DE PAGO MÓVIL (Campos individuales) -->
+                                                            <div class="mb-3">
+                                                                <label class="form-label fw-bold" style="color:#0033a0;">
+                                                                    <i class="fa fa-mobile-alt me-1"></i> Datos del Pago Móvil
+                                                                </label>
+                                                                
+                                                                <!-- Teléfono -->
+                                                                <t t-if="comercio.get('pagomovil_telefono')">
+                                                                    <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
+                                                                        <span class="input-group-text bg-white" style="border:2px solid #e9ecef; border-right:none; color:#666;">
+                                                                            <i class="fa fa-phone"></i>
+                                                                        </span>
+                                                                        <input type="text" 
+                                                                               class="form-control" 
+                                                                               readonly="readonly"
+                                                                               t-att-value="comercio['pagomovil_telefono']"
+                                                                               id="pmTelefonoInput"
+                                                                               style="border:2px solid #e9ecef; font-weight:600; color:#0033a0; background:#f8f9fa;"/>
+                                                                        <button type="button" 
+                                                                                class="btn btn-outline-primary"
+                                                                                onclick="bpCopiarCampo('pmTelefonoInput', 'teléfono')"
+                                                                                style="border:2px solid #0033a0; border-left:none; background:white; color:#0033a0; font-weight:600;"
+                                                                                title="Copiar teléfono">
+                                                                            <i class="fa fa-copy"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </t>
+
+                                                                <!-- RIF -->
+                                                                <t t-if="comercio.get('pagomovil_rif')">
+                                                                    <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
+                                                                        <span class="input-group-text bg-white" style="border:2px solid #e9ecef; border-right:none; color:#666;">
+                                                                            <i class="fa fa-id-card"></i>
+                                                                        </span>
+                                                                        <input type="text" 
+                                                                               class="form-control" 
+                                                                               readonly="readonly"
+                                                                               t-att-value="comercio['pagomovil_rif']"
+                                                                               id="pmRIFInput"
+                                                                               style="border:2px solid #e9ecef; font-weight:600; color:#0033a0; background:#f8f9fa;"/>
+                                                                        <button type="button" 
+                                                                                class="btn btn-outline-primary"
+                                                                                onclick="bpCopiarCampo('pmRIFInput', 'RIF')"
+                                                                                style="border:2px solid #0033a0; border-left:none; background:white; color:#0033a0; font-weight:600;"
+                                                                                title="Copiar RIF">
+                                                                            <i class="fa fa-copy"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </t>
+
+                                                                <!-- Banco -->
+                                                                <t t-if="comercio.get('pagomovil_banco')">
+                                                                    <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
+                                                                        <span class="input-group-text bg-white" style="border:2px solid #e9ecef; border-right:none; color:#666;">
+                                                                            <i class="fa fa-university"></i>
+                                                                        </span>
+                                                                        <input type="text" 
+                                                                               class="form-control" 
+                                                                               readonly="readonly" 
+                                                                               t-att-value="comercio['pagomovil_banco']"
+                                                                               id="pmBancoInput"
+                                                                               style="border:2px solid #e9ecef; font-weight:600; color:#0033a0; background:#f8f9fa;"/>
+                                                                        <button type="button" 
+                                                                                class="btn btn-outline-primary"
+                                                                                onclick="bpCopiarCampo('pmBancoInput', 'banco')"
+                                                                                style="border:2px solid #0033a0; border-left:none; background:white; color:#0033a0; font-weight:600;"
+                                                                                title="Copiar banco">
+                                                                            <i class="fa fa-copy"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </t>
+                                                            </div>
+
+                                                            <!-- Botón Copiar Todos los Datos de Pago Móvil -->
+                                                            <div class="d-grid gap-2 mt-4 mb-3">
+                                                                <button type="button" 
+                                                                        class="btn btn-outline-primary btn-lg"
+                                                                        onclick="bpCopiarDatosPagoMovil()"
+                                                                        style="border:2px solid #0033a0; color:#0033a0; font-weight:700; border-radius:10px; padding:12px;"
+                                                                        title="Copiar teléfono, RIF y banco">
+                                                                    <i class="fa fa-clipboard me-2"></i>Copiar Datos de Pago Móvil
+                                                                </button>
+                                                            </div>
+
+                                                            <!-- Botón Continuar -->
+                                                            <div class="d-grid gap-2 mt-3">
+                                                                <button type="button" 
+                                                                        class="btn btn-lg" 
+                                                                        style="background:linear-gradient(135deg, #0033a0 0%, #002270 100%); 
+                                                                               color:white; font-weight:700; border-radius:10px; padding:15px; border:none;"
+                                                                        onclick="bpCloseComercioModal()">
+                                                                    <i class="fa fa-check-circle me-2"></i>Continuar con el Pago
+                                                                </button>
+                                                            </div>
+
+                                                            <p class="text-muted text-center small mt-3 mb-0">
+                                                                <i class="fa fa-shield-alt text-success me-1"></i>
+                                                                Pago seguro procesado por BestPay
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
 
                                         <!-- Formulario de Pago Móvil -->
                                         <form action="/pago/bdv/procesar" method="post">
@@ -234,7 +391,89 @@
                     <!-- Bootstrap JS -->
                     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
                     
+                    <!-- Script para manejar el modal del comercio -->
                     <script type="text/javascript">
+//<![CDATA[
+                        function bpCopiarCampo(inputId, nombreCampo) {
+                            var input = document.getElementById(inputId);
+                            if (input && input.value) {
+                                bpCopiarAlPortapapeles(input.value, nombreCampo);
+                            }
+                        }
+
+                        function bpCopiarDatosPagoMovil() {
+                            var telefono = document.getElementById('pmTelefonoInput');
+                            var rif = document.getElementById('pmRIFInput');
+                            var banco = document.getElementById('pmBancoInput');
+                            
+                            var textoCompleto = "DATOS PARA PAGO MÓVIL\n\n";
+                            textoCompleto += "Teléfono: " + (telefono ? telefono.value : '') + "\n";
+                            textoCompleto += "RIF: " + (rif ? rif.value : '') + "\n";
+                            textoCompleto += "Banco: " + (banco ? banco.value : '');
+                            
+                            bpCopiarAlPortapapeles(textoCompleto, 'datos de Pago Móvil');
+                        }
+
+                        function bpCopiarAlPortapapeles(texto, descripcion) {
+                            if (!texto) return;
+                            if (navigator.clipboard && navigator.clipboard.writeText){
+                                navigator.clipboard.writeText(texto).then(function() {
+                                    bpMostrarNotificacionCopiado(descripcion);
+                                }).catch(function(err) {
+                                    bpFallbackCopy(texto, descripcion);
+                                });
+                            } else {
+                                bpFallbackCopy(texto, descripcion);
+                            }
+                        }
+
+                        function bpFallbackCopy(texto, descripcion) {
+                            var ta = document.createElement('textarea');
+                            ta.value = texto;
+                            ta.style.position = 'fixed';
+                            ta.style.opacity = '0';
+                            document.body.appendChild(ta);
+                            ta.select();
+                            try {
+                                document.execCommand('copy');
+                                bpMostrarNotificacionCopiado(descripcion);
+                            } catch(err) {
+                                console.error('Error al copiar:', err);
+                            }
+                            document.body.removeChild(ta);
+                        }
+
+                        function bpMostrarNotificacionCopiado(descripcion) {
+                            var toast = document.createElement('div');
+                            toast.className = 'alert alert-success';
+                            toast.style.cssText = 'position:fixed; top:20px; right:20px; z-index:9999; min-width:250px; animation:slideIn 0.3s ease;';
+                            toast.innerHTML = '<i class="fa fa-check-circle me-2"></i><strong>¡Copiado!</strong><br/><small>Se copió ' + descripcion + ' al portapapeles</small>';
+                            document.body.appendChild(toast);
+                            
+                            setTimeout(function() {
+                                toast.style.opacity = '0';
+                                toast.style.transition = 'opacity 0.3s ease';
+                                setTimeout(function() {
+                                    if (document.body.contains(toast)) {
+                                        document.body.removeChild(toast);
+                                    }
+                                }, 300);
+                            }, 3000);
+                        }
+
+                        function bpCloseComercioModal() {
+                            var modal = document.getElementById('comercioModal');
+                            if (modal) {
+                                modal.style.opacity = '0';
+                                modal.style.transition = 'opacity 0.3s ease';
+                                setTimeout(function() {
+                                    modal.style.display = 'none';
+                                    var firstInput = document.querySelector('form select[name="banco"]');
+                                    if (firstInput) firstInput.focus();
+                                }, 300);
+                            }
+                        }
+
                         (function(){
                             function bpEnableDigitsOnly(){
                                 document.querySelectorAll('.bp-digits').forEach(function(el){
@@ -252,6 +491,7 @@
                                 bpEnableDigitsOnly();
                             }
                         })();
+//]]>
                     </script>
                 </body>
             </html>
@@ -284,7 +524,6 @@
                         }
                         .success-icon { color: #28a745; }
                         .error-icon { color: #dc3545; }
-
                         .bp-ref-wrapper{
                             position: relative;
                             display: inline-block;
@@ -318,16 +557,12 @@
                                         <t t-if="status == 'success'">
                                             <i class="fa fa-check-circle result-icon success-icon"></i>
                                             <h2 class="text-success mb-3">¡Pago Exitoso!</h2>
-                                            <p class="lead text-muted mb-4">
-                                                Tu pago ha sido procesado correctamente por el Banco de Venezuela.
-                                            </p>
+                                            <p class="lead text-muted mb-4">Tu pago ha sido procesado correctamente por el Banco de Venezuela.</p>
                                         </t>
                                         <t t-else="">
                                             <i class="fa fa-times-circle result-icon error-icon"></i>
                                             <h2 class="text-danger mb-3">Pago Rechazado</h2>
-                                            <p class="lead text-muted mb-4">
-                                                <t t-esc="message"/>
-                                            </p>
+                                            <p class="lead text-muted mb-4"><t t-esc="message"/></p>
                                         </t>
 
                                         <div class="bg-light rounded p-3 mb-4">
@@ -343,70 +578,30 @@
                                             </div>
                                         </div>
 
-                                        <!-- ====== DATOS DEL PAGADOR (solo C2P y solo en pago exitoso) ====== -->
+                                        <!-- DATOS DEL PAGADOR (solo C2P y solo en pago exitoso) -->
                                         <t t-if="transaction.bdv_c2p_customer_document_id and status == 'success'">
                                             <t t-set="c2p_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
                                             <div class="bg-light rounded p-3 mb-4 text-start">
                                                 <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Cédula:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_document_id"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Teléfono:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_phone"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Banco:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="c2p_banks.get(transaction.bdv_c2p_customer_bank_code) or transaction.bdv_c2p_customer_bank_code"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Monto:</strong></div>
-                                                    <div class="col-7 text-end">
-                                                        <t t-if="transaction.amount_ves">
-                                                            <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs
-                                                        </t>
-                                                        <t t-else="">
-                                                            <t t-esc="'%.2f' % transaction.amount"/> <t t-esc="transaction.currency_id.name"/>
-                                                        </t>
-                                                    </div>
-                                                </div>
-                                                <div class="row">
-                                                    <div class="col-5"><strong>Fecha:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div>
-                                                </div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Cédula:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_document_id"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Teléfono:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_phone"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Banco:</strong></div><div class="col-7 text-end"><t t-esc="c2p_banks.get(transaction.bdv_c2p_customer_bank_code) or transaction.bdv_c2p_customer_bank_code"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Monto:</strong></div><div class="col-7 text-end"><t t-if="transaction.amount_ves"><t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs</t><t t-else=""><t t-esc="'%.2f' % transaction.amount"/> <t t-esc="transaction.currency_id.name"/></t></div></div>
+                                                <div class="row"><div class="col-5"><strong>Fecha:</strong></div><div class="col-7 text-end"><t t-esc="transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div></div>
                                             </div>
                                         </t>
 
-                                                                                <!-- ====== DATOS DEL PAGADOR (solo Pago Móvil y solo en pago exitoso) ====== -->
+                                        <!-- DATOS DEL PAGADOR (solo Pago Móvil y solo en pago exitoso) -->
                                         <t t-if="transaction.bdv_cedula_pagador and status == 'success'">
                                             <t t-set="pm_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
                                             <div class="bg-light rounded p-3 mb-4 text-start">
                                                 <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Cédula:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_cedula_pagador"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Teléfono:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_telefono_pagador"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Banco:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="pm_banks.get(transaction.bdv_banco_origen) or transaction.bdv_banco_origen or 'N/A'"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Referencia:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_referencia or transaction.external_reference or 'N/A'"/></div>
-                                                </div>
-                                                <div class="row mb-1">
-                                                    <div class="col-5"><strong>Monto:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="'{:,.2f}'.format(transaction.bdv_importe or 0).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs</div>
-                                                </div>
-                                                <div class="row">
-                                                    <div class="col-5"><strong>Fecha:</strong></div>
-                                                    <div class="col-7 text-end"><t t-esc="transaction.bdv_fecha_pago and transaction.bdv_fecha_pago.strftime('%d/%m/%Y') or transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div>
-                                                </div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Cédula:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_cedula_pagador"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Teléfono:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_telefono_pagador"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Banco:</strong></div><div class="col-7 text-end"><t t-esc="pm_banks.get(transaction.bdv_banco_origen) or transaction.bdv_banco_origen or 'N/A'"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Referencia:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_referencia or transaction.external_reference or 'N/A'"/></div></div>
+                                                <div class="row mb-1"><div class="col-5"><strong>Monto:</strong></div><div class="col-7 text-end"><t t-esc="'{:,.2f}'.format(transaction.bdv_importe or 0).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs</div></div>
+                                                <div class="row"><div class="col-5"><strong>Fecha:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_fecha_pago and transaction.bdv_fecha_pago.strftime('%d/%m/%Y') or transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div></div>
                                             </div>
                                         </t>
                                     </div>
@@ -415,8 +610,8 @@
                         </div>
                     </div>
 
-
                     <script type="text/javascript">
+//<![CDATA[
                         function bpCopyToClipboard(text, btn){
                             if(!text || !btn){ return; }
                             var original = btn.innerHTML;
@@ -428,7 +623,7 @@
                                     btn.innerHTML = original;
                                 }, 1800);
                             };
-                            if (navigator.clipboard &amp;&amp; navigator.clipboard.writeText){
+                            if (navigator.clipboard && navigator.clipboard.writeText){
                                 navigator.clipboard.writeText(text).then(done).catch(function(){ bpFallbackCopy(text, done); });
                             } else {
                                 bpFallbackCopy(text, done);
@@ -441,6 +636,7 @@
                             try { document.execCommand('copy'); } catch(e){}
                             document.body.removeChild(ta); done();
                         }
+//]]>
                     </script>
                 </body>
             </html>
