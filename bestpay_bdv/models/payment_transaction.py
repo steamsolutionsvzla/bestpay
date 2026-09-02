@@ -674,7 +674,7 @@ class PaymentTransactionBDV(models.Model):
         try:
             payload = self._bestpay_build_webhook_payload_3ro()
             # Serialización estable: sort_keys para garantizar misma firma siempre
-            payload_str = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            payload_str = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
             signature = self._bestpay_compute_webhook_signature_3ro(payload_str, partner.bestpay_webhook_secret)
 
             headers = {
