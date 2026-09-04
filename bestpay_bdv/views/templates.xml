@@ -167,6 +167,8 @@
                                                                     <p class="text-muted small mt-2 mb-0">
                                                                         <i class="fa fa-info-circle me-1"></i>
                                                                         Tasa BCV: <t t-esc="transaction.exchange_rate_bcv"/> Bs/$
+                                                                        <span class="mx-2">/</span>
+                                                                        Precio: $<t t-esc="'%.2f' % (transaction.amount_ves / transaction.exchange_rate_bcv if transaction.exchange_rate_bcv else transaction.amount)"/>
                                                                     </p>
                                                                 </t>
                                                             </div>
@@ -176,7 +178,7 @@
                                                                 <label class="form-label fw-bold" style="color:#0033a0;">
                                                                     <i class="fa fa-mobile-alt me-1"></i> Datos del Pago Móvil
                                                                 </label>
-                                                                
+
                                                                 <!-- RIF -->
                                                                 <t t-if="comercio.get('pagomovil_rif')">
                                                                     <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
@@ -558,7 +560,7 @@
                                     <div class="card-body p-5 text-center">
                                         <t t-if="status == 'success'">
                                             <i class="fa fa-check-circle result-icon success-icon"></i>
-                                            <h2 class="text-success mb-3">¡Pago Exitoso!</h2>
+                                            <h2 class="text-success mb-3">¡Pago Verificado!</h2>
                                             <p class="lead text-muted mb-4">Tu pago ha sido procesado correctamente por el Banco de Venezuela.</p>
                                         </t>
                                         <t t-else="">
@@ -568,11 +570,11 @@
                                         </t>
 
                                         <div class="bg-light rounded p-3 mb-4">
-                                            <p class="mb-1 small text-muted">Referencia Externa</p>
+                                            <p class="mb-1 small text-muted">Referencia</p>
                                             <div class="bp-ref-wrapper">
-                                                <span class="fw-bold mb-0"><t t-esc="transaction.external_reference or 'N/A'"/></span>
+                                                <span class="fw-bold mb-0"><t t-esc="transaction.reference or 'N/A'"/></span>
                                                 <button type="button" class="bp-copy-icon"
-                                                        t-att-data-copy="transaction.external_reference or ''"
+                                                        t-att-data-copy="transaction.reference or ''"
                                                         onclick="bpCopyToClipboard(this.getAttribute('data-copy'), this)"
                                                         title="Copiar referencia" aria-label="Copiar referencia">
                                                     <i class="fa fa-copy"></i>
