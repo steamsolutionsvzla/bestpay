@@ -177,6 +177,28 @@
                                                                     <i class="fa fa-mobile-alt me-1"></i> Datos del Pago Móvil
                                                                 </label>
                                                                 
+                                                                <!-- RIF -->
+                                                                <t t-if="comercio.get('pagomovil_rif')">
+                                                                    <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
+                                                                        <span class="input-group-text bg-white" style="border:2px solid #e9ecef; border-right:none; color:#666;">
+                                                                            <i class="fa fa-id-card"></i>
+                                                                        </span>
+                                                                        <input type="text" 
+                                                                               class="form-control" 
+                                                                               readonly="readonly"
+                                                                               t-att-value="comercio['pagomovil_rif']"
+                                                                               id="pmRIFInput"
+                                                                               style="border:2px solid #e9ecef; font-weight:600; color:#0033a0; background:#f8f9fa;"/>
+                                                                        <button type="button" 
+                                                                                class="btn btn-outline-primary"
+                                                                                onclick="bpCopiarCampo('pmRIFInput', 'RIF')"
+                                                                                style="border:2px solid #0033a0; border-left:none; background:white; color:#0033a0; font-weight:600;"
+                                                                                title="Copiar RIF">
+                                                                            <i class="fa fa-copy"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </t>
+
                                                                 <!-- Teléfono -->
                                                                 <t t-if="comercio.get('pagomovil_telefono')">
                                                                     <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
@@ -199,27 +221,7 @@
                                                                     </div>
                                                                 </t>
 
-                                                                <!-- RIF -->
-                                                                <t t-if="comercio.get('pagomovil_rif')">
-                                                                    <div class="input-group mb-2" style="border-radius:10px; overflow:hidden;">
-                                                                        <span class="input-group-text bg-white" style="border:2px solid #e9ecef; border-right:none; color:#666;">
-                                                                            <i class="fa fa-id-card"></i>
-                                                                        </span>
-                                                                        <input type="text" 
-                                                                               class="form-control" 
-                                                                               readonly="readonly"
-                                                                               t-att-value="comercio['pagomovil_rif']"
-                                                                               id="pmRIFInput"
-                                                                               style="border:2px solid #e9ecef; font-weight:600; color:#0033a0; background:#f8f9fa;"/>
-                                                                        <button type="button" 
-                                                                                class="btn btn-outline-primary"
-                                                                                onclick="bpCopiarCampo('pmRIFInput', 'RIF')"
-                                                                                style="border:2px solid #0033a0; border-left:none; background:white; color:#0033a0; font-weight:600;"
-                                                                                title="Copiar RIF">
-                                                                            <i class="fa fa-copy"></i>
-                                                                        </button>
-                                                                    </div>
-                                                                </t>
+                                                                
 
                                                                 <!-- Banco -->
                                                                 <t t-if="comercio.get('pagomovil_banco')">

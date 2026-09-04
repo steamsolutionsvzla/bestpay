@@ -18,12 +18,12 @@
                                                         <!-- GRUPO 1: Pago Móvil (Existente) -->
                             <group string="Pago Móvil">
                                 <field name="bdv_api_key"
-                                       string="API Key BDV (QA)"
-                                       password="True"
-                                       placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"/>
+                                        string="API Key BDV (QA)"
+                                        widget="password_toggle"
+                                        placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"/>
                                 <field name="bdv_api_key_prod"
                                        string="API Key BDV (Producción)"
-                                       password="True"
+                                       widget="password_toggle"
                                        placeholder="Ej: 34F2AE8C4FBF39C5A031348C84F21D9A"/>
                                 <field name="bdv_telefono_destino"
                                        placeholder="04127141363"
@@ -33,7 +33,7 @@
                             <!-- GRUPO 2: C2P Cuentas Múltiples (NUEVO) -->
                             <group string="C2P Cuentas Múltiples">
                                 <field name="bdv_api_key_c2p"
-                                       password="True"
+                                       widget="password_toggle"
                                        placeholder="API Key específica para flujo C2P"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
                                 <field name="bdv_phone_destino_c2p"
@@ -43,21 +43,19 @@
                             
                             <!-- GRUPO 3: Notificación (NUEVO)            -->
                             <group string="Notificación">
-                                <group string="Notificación">
                                     <field name="bdv_api_key_notification"
-                                        password="True"
+                                        widget="password_toggle"
                                         placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
                                         required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
                                     <field name="bdv_telefono_notificacion"
                                         placeholder="04141234567"
                                         required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
-                                </group>
                             </group>
 
                             <!-- GRUPO 4: Consulta de Movimientos (NUEVO) -->
                             <group string="Consulta de Movimientos">
                                 <field name="bdv_api_key_movimientos"
-                                       password="True"
+                                       widget="password_toggle"
                                        placeholder="Ej: 256D0FDD36F1B1B3F1208A9B6EC693"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
                                 <!-- Botón para consultar desde Odoo (Uso interno BestPay) -->
@@ -90,7 +88,7 @@
                                 placeholder="https://koole.midominio.com/pago/resultado"/>
                         </group>
                         <group>
-                            <field name="bestpay_webhook_secret" password="True"/>
+                            <field name="bestpay_webhook_secret" widget="password_toggle"/>
                             <field name="bestpay_webhook_active" widget="boolean_toggle"/>
                         </group>
                     </group>
@@ -113,14 +111,12 @@
 
                         <!-- 📱 DATOS DE PAGO MÓVIL (NUEVO) -->
                         <group string="Datos de Pago Móvil (Checkout)" invisible="not is_api_client">
-                            <group>
+                               <field name="bestpay_pagomovil_rif" 
+                                    placeholder="J-123456789"/> 
                                 <field name="bestpay_pagomovil_telefono" 
                                     placeholder="04161234567"/>
-                                <field name="bestpay_pagomovil_rif" 
-                                    placeholder="J-123456789"/>
                                 <field name="bestpay_pagomovil_banco" 
                                     placeholder="Banco de Venezuela"/>
-                            </group>
                         </group>
                     </group>
 
