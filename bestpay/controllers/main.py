@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import http, fields
 from odoo.http import request
+from datetime import timedelta
 import json
 import logging
 import base64
@@ -10,6 +11,8 @@ _logger = logging.getLogger(__name__)
 
 
 class BestPayApiController(http.Controller):
+
+    LINK_EXPIRATION_HOURS = 24  # Regla de negocio: los links de pago vencen a las 24h
 
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
@@ -59,25 +62,51 @@ class BestPayApiController(http.Controller):
             }
         
         if external_reference:
-            # Buscamos si ya existe una transacción aprobada, pendiente o en borrador 
-            # para este mismo cliente con esa misma referencia externa.
-            transaccion_duplicada = request.env['payment.transaction'].sudo().search([
+            transaccion_existente = request.env['payment.transaction'].sudo().search([
                 ('bestpay_client_id', '=', partner.id),
                 ('external_reference', '=', external_reference),
-                # Dependiendo de tu lógica, puedes filtrar por estados no fallidos:
-                ('state', 'not in', ['cancel', 'error']) 
-            ], limit=1)
+                ('state', 'not in', ['cancel', 'error']),
+            ], limit=1, order='create_date desc')
 
-            if transaccion_duplicada:
-                return {
-                    'status': 'error',
-                    'message': f'Transacción duplicada. La referencia externa "{external_reference}" ya está registrada para este cliente.',
-                    # Opcional: Le devuelves los datos de la que ya existe por si necesita recuperarla
-                    'transaction_id': transaccion_duplicada.id,
-                    'odoo_reference': transaccion_duplicada.reference,
-                    'uuid_hash': transaccion_duplicada.uuid_hash,
-                    'transaction_status': dict(transaccion_duplicada._fields['state']._description_selection(request.env)).get(transaccion_duplicada.state),
-                }
+            if transaccion_existente:
+                # Caso 1: ya fue pagada -> nunca se crea una nueva, reutilizamos su link.
+                # (la pantalla /pago/bdv/checkout ya bloquea reprocesar un pago 'done', es seguro)
+                if transaccion_existente.state == 'done':
+                    return {
+                        'status': 'success',
+                        'transaction_id': transaccion_existente.id,
+                        'odoo_reference': transaccion_existente.reference,
+                        'external_reference': transaccion_existente.external_reference,
+                        'uuid_hash': transaccion_existente.uuid_hash,
+                        'checkout_url': transaccion_existente.payment_link,
+                        'transaction_status': 'done',
+                        'message': 'Esta orden ya fue pagada.',
+                    }
+
+                # Caso 2: todavía no vence (< 24h desde su creación) -> reutilizamos el mismo link.
+                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
+                if transaccion_existente.create_date >= limite_expiracion:
+                    return {
+                        'status': 'success',
+                        'transaction_id': transaccion_existente.id,
+                        'odoo_reference': transaccion_existente.reference,
+                        'external_reference': transaccion_existente.external_reference,
+                        'uuid_hash': transaccion_existente.uuid_hash,
+                        'checkout_url': transaccion_existente.payment_link,
+                        'transaction_status': transaccion_existente.state,
+                    }
+
+                # Caso 3: venció y no se pagó -> la cancelamos y dejamos que el flujo normal
+                # de abajo cree una transacción nueva con el mismo external_reference.
+                transaccion_existente.write({
+                    'state': 'cancel',
+                    'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
+                })
+                _logger.info(
+                    "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
+                    transaccion_existente.reference, external_reference
+                )
+                # No hay return aquí a propósito: el código sigue hacia abajo y crea la nueva.
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
@@ -236,6 +265,7 @@ class BestPayApiController(http.Controller):
             'odoo_reference': tx.reference,
             'external_reference': tx.external_reference,
             'uuid_hash': tx.uuid_hash,
+            'checkout_url': datos_banco.get('payment_link') or datos_banco.get('checkout_url'),
             'flow_type': tx.bestpay_flow_type,
             'payment_details': datos_banco
         }
