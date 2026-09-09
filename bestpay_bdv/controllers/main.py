@@ -33,7 +33,24 @@ class BestpayBDVController(http.Controller):
                 'status': 'success',
                 'message': 'Este pago ya fue procesado exitosamente.'
             })
-        
+
+        if transaction.state == 'error':
+            return request.render('bestpay_bdv.bdv_checkout_result', {
+                'transaction': transaction,
+                'status': 'error',
+                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+            })
+
+        if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
+            return request.render('bestpay_bdv.bdv_checkout_result', {
+                'transaction': transaction,
+                'status': 'error',
+                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+            })
+
+        # Antes de mostrar el monto al usuario, refrescamos con la tasa BCV del día
+        transaction._bestpay_action_recalculate_jit_ves()
+
         # --- NUEVA LÓGICA DE ENRUTAMIENTO ---
         method_code = transaction.payment_method_id.code
 
@@ -102,9 +119,6 @@ class BestpayBDVController(http.Controller):
                 'status': 'error',
                 'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
             })
-
-        # Antes de mostrar el monto al usuario, refrescamos con la tasa BCV del día
-        transaction._bestpay_action_recalculate_jit_ves()
 
         # Mapear datos del formulario a los campos del modelo
         cedula_raw = post.get('cedula', '')

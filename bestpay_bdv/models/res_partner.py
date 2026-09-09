@@ -138,18 +138,45 @@ class ResPartnerBDV(models.Model):
         string="Banco Pago Móvil",
         help="Banco del comercio para pagos móviles (ej: Banco de Venezuela).",
     )
-        # =================================================================
+
+     # =====================================================
+    # CAMPO COMPUTADO: Entorno BDV (para vistas)
+    # =====================================================
+    # Este campo lee el ambiente del provider BDV activo para poder
+    # ocultar los campos de QA cuando el provider esté en producción.
+    # En producción, todas las APIs usan la misma key (bdv_api_key_prod),
+    # así que los campos específicos de QA no tienen sentido mostrarlos.
+    bdv_environment = fields.Selection(
+        selection=[
+            ('qa', 'QA (Pruebas)'),
+            ('prod', 'Producción'),
+        ],
+        string="Entorno BDV (Computado)",
+        compute='_compute_bdv_environment',
+        help="Ambiente configurado en el provider BDV. Se usa para ocultar campos de QA en producción."
+    )
+    
+    @api.depends('allowed_provider_ids')
+    def _compute_bdv_environment(self):
+        """Lee el ambiente del provider BDV activo"""
+        for partner in self:
+            provider = self.env['payment.provider'].sudo().search([
+                ('code', '=', 'bdv'),
+                ('is_bestpay_provider', '=', True),
+            ], limit=1)
+            partner.bdv_environment = provider.bdv_environment if provider else 'qa'
+    # =================================================================
     # ⚠️ NOTA: MÉTODO TEMPORAL - Usa Wizard TransientModel
     # =================================================================
-    # Este método es temporal para QA. En producción se migrará a:
-    # - Modelo persistente (bestpay_bdv.movimiento)
-    # - Conciliación automática con payment.transaction
-    # - Historial y reportes
+    # Este método abre un wizard intermedio para que el usuario ingrese
+    # los datos de la consulta (cuenta, fechas). Luego ejecuta la consulta
+    # con paginación automática y muestra los resultados en otro wizard.
     # =================================================================
-    
     def action_bdv_consultar_movimientos(self):
+        """Abre el wizard intermedio para ingresar datos de consulta"""
         self.ensure_one()
         
+        # Validar que el provider BDV esté configurado
         provider = self.env['payment.provider'].sudo().search([
             ('code', '=', 'bdv'),
             ('is_bestpay_provider', '=', True),
@@ -158,37 +185,23 @@ class ResPartnerBDV(models.Model):
         if not provider:
             raise UserError("No hay proveedor BDV configurado en el sistema.")
         
-        # ==========================================================
-        # CORRECCIÓN DEFINITIVA PARA QA: Usar EXACTAMENTE los datos del PDF
-        # El ambiente Dummy del BDV solo responde con datos de prueba en este rango.
-        # ==========================================================
-        cuenta = '01020501830003283374'
-        fecha_ini = '01/01/2025'
-        fecha_fin = '28/01/2025'
+        # Validar que haya API Key según el ambiente
+        env_type = provider.bdv_environment.strip().lower() if provider.bdv_environment else 'qa'
+        if env_type == 'qa':
+            if not self.bdv_api_key_movimientos:
+                raise UserError("Este comercio no tiene configurada la API Key de Movimientos (QA).")
+        else:
+            if not self.bdv_api_key_prod:
+                raise UserError("Este comercio no tiene configurada la API Key de Producción.")
         
-        resultado = provider.bdv_consultar_movimientos(
-            cuenta=cuenta,
-            fecha_ini=fecha_ini,
-            fecha_fin=fecha_fin,
-            partner=self,
-        )
-        
-        if not resultado.get('success'):
-            raise UserError(f"Error consultando movimientos: {resultado.get('message')}")
-        
-        movements = resultado.get('movements', [])
-        
-        if not movements:
-            raise UserError(f"No hay movimientos de prueba para la cuenta {cuenta} en el rango indicado.")
-        
+        # Abrir wizard intermedio
         return {
             'type': 'ir.actions.act_window',
-            'name': f'Movimientos BDV - {self.name} (Prueba QA)',
-            'res_model': 'bestpay_bdv.movimiento.wizard',
+            'name': f'Consultar Movimientos BDV - {self.name}',
+            'res_model': 'bestpay_bdv.consulta.wizard',
             'view_mode': 'form',
             'target': 'new',
             'context': {
                 'default_partner_id': self.id,
-                'default_movements_json': json.dumps(movements, ensure_ascii=False),
             }
         }

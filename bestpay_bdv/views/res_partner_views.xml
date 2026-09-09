@@ -20,7 +20,8 @@
                                 <field name="bdv_api_key"
                                         string="API Key BDV (QA)"
                                         widget="password_toggle"
-                                        placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"/>
+                                        placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
+                                        invisible="bdv_environment == 'prod'"/>
                                 <field name="bdv_api_key_prod"
                                        string="API Key BDV (Producción)"
                                        widget="password_toggle"
@@ -35,7 +36,8 @@
                                 <field name="bdv_api_key_c2p"
                                        widget="password_toggle"
                                        placeholder="API Key específica para flujo C2P"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                       invisible="bdv_environment == 'prod'"/>
                                 <field name="bdv_phone_destino_c2p"
                                        placeholder="Teléfono o Cuenta destino del comercio (C2P)"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
@@ -46,7 +48,8 @@
                                     <field name="bdv_api_key_notification"
                                         widget="password_toggle"
                                         placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
-                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                        invisible="bdv_environment == 'prod'"/>
                                     <field name="bdv_telefono_notificacion"
                                         placeholder="04141234567"
                                         required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
@@ -57,7 +60,8 @@
                                 <field name="bdv_api_key_movimientos"
                                        widget="password_toggle"
                                        placeholder="Ej: 256D0FDD36F1B1B3F1208A9B6EC693"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                       invisible="bdv_environment == 'prod'"/>
                                 <!-- Botón para consultar desde Odoo (Uso interno BestPay) -->
                                 <button name="action_bdv_consultar_movimientos" 
                                         string="🔍 Consultar Movimientos" 

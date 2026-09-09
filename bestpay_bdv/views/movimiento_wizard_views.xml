@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Vista Form del Wizard -->
+        <!-- ===================================================== -->
+    <!-- VISTA DEL WIZARD DE RESULTADOS (MODIFICADA)           -->
+    <!-- ===================================================== -->
     <record id="view_bdv_movimiento_wizard_form" model="ir.ui.view">
         <field name="name">bestpay_bdv.movimiento.wizard.form</field>
         <field name="model">bestpay_bdv.movimiento.wizard</field>
         <field name="arch" type="xml">
-            <form string="Movimientos BDV (Temporal - QA)">
+            <form string="Movimientos BDV">
                 <sheet>
                     <group>
                         <group>
                             <field name="partner_id" readonly="1"/>
+                            <field name="cuenta" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="fecha_ini" readonly="1"/>
+                            <field name="fecha_fin" readonly="1"/>
                             <field name="total_movements" readonly="1"/>
                         </group>
                     </group>
@@ -24,6 +31,8 @@
                                     <field name="saldo"/>
                                     <field name="referencia"/>
                                     <field name="descripcion"/>
+                                    <field name="nro_mov" optional="hide"/>
+                                    <field name="observacion" optional="hide"/>
                                 </list>
                             </field>
                         </page>
@@ -34,6 +43,43 @@
                 </sheet>
                 <footer>
                     <button string="Cerrar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+        <!-- ===================================================== -->
+    <!-- VISTA DEL WIZARD INTERMEDIO (Ingresar datos)          -->
+    <!-- ===================================================== -->
+    <record id="view_bdv_consulta_wizard_form" model="ir.ui.view">
+        <field name="name">bestpay_bdv.consulta.wizard.form</field>
+        <field name="model">bestpay_bdv.consulta.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Consultar Movimientos BDV">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Datos de Consulta">
+                        <group>
+                            <field name="cuenta" placeholder="Ej: 01020501830003283374"/>
+                            <field name="fecha_ini"/>
+                            <field name="fecha_fin"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="alert">
+                        <strong>ℹ️ Información:</strong>
+                        <ul>
+                            <li>El número de cuenta debe tener 20 dígitos</li>
+                            <li>La consulta traerá automáticamente todos los movimientos (paginación automática)</li>
+                            <li>Límite máximo: 1000 movimientos por consulta</li>
+                        </ul>
+                    </div>
+                </sheet>
+                <footer>
+                    <button string="🔍 Consultar" name="action_consultar" type="object" class="btn-primary"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
                 </footer>
             </form>
         </field>

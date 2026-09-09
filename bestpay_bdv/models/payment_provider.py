@@ -113,13 +113,17 @@ class PaymentProviderBDV(models.Model):
             _logger.info(f"[BDV MOVIMIENTOS] 🟢 QA: Usando payload EXACTO de la documentación actualizada (Cuenta: 01029999999999999999).")
             
         else:
-            # PRODUCCIÓN: Lógica dinámica normal
-            api_key = getattr(partner, 'bdv_api_key_movimientos', '') if partner else ''
+            # PRODUCCIÓN: Usar la API Key general de producción (la misma para todas las APIs)
+            api_key = getattr(partner, 'bdv_api_key_prod', '') if partner else ''
             if not api_key:
-                return {'success': False, 'code': '9999', 'message': 'Falta API Key de Movimientos en el comercio.'}
+                return {
+                    'success': False, 
+                    'code': '9999', 
+                    'message': 'Falta API Key de Producción en el comercio.'
+                }
             
-            url_base = (self.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444').replace('/getMovement/v2', '').rstrip('/')
-            url = f"{url_base}/apis/bdv/consulta/movimientos/v2"
+            # ✅ URL CORRECTA de producción según documentación oficial
+            url = 'https://bdvconciliacion.banvenez.com/apis/bdv/consulta/movimientos'
             
             payload = {
                 "cuenta": cuenta,
@@ -129,8 +133,8 @@ class PaymentProviderBDV(models.Model):
             }
             if nro_movimiento:
                 payload["nroMovimiento"] = nro_movimiento
-                
-            _logger.info(f"[BDV MOVIMIENTOS] 🔵 Ambiente PRODUCCIÓN detectado.")
+            
+            _logger.info(f"[BDV MOVIMIENTOS] 🔵 PRODUCCIÓN: Consultando cuenta {cuenta}")
 
         headers = {
             "X-API-Key": api_key, 
