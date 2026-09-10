@@ -792,16 +792,17 @@ class PaymentTransactionBDV(models.Model):
         tx = self.search([
             ('bdv_telefono_pagador', '=', telefono_pagador),
             ('bdv_importe', '=', monto),
-            ('state', 'in', ['draft', 'pending']),
-        ], limit=1)
+            # Eliminamos el filtro de estado para encontrar también las 'done'
+        ], limit=1).filtered(lambda t: t.state in ['draft', 'pending', 'done'])
 
         # ==========================================================
         # ESCENARIO A: Transacción encontrada
         # ==========================================================
         if tx:
+
             if tx.state == 'done':
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya estaba completada (Duplicado)")
-                return {'codigo': '01'} # Indica al controlador que responda 01
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya está completada → Código 01 (Re-notificación)")
+                return {'codigo': '01'}  # ✅ Retorna 01 para re-notificaciones
             
             # Actualizar con los datos reales del banco y marcar como pagada
             vals_to_write = {
