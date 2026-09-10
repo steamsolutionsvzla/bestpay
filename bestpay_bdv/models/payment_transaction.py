@@ -786,23 +786,40 @@ class PaymentTransactionBDV(models.Model):
         if telefono_pagador and not telefono_pagador.startswith('0'):
             telefono_pagador = '0' + telefono_pagador
 
+       # ==========================================================
+        # BÚSQUEDA PRINCIPAL: Por Referencia (PRIORIDAD 1)
         # ==========================================================
-        # BÚSQUEDA PRINCIPAL: Por Teléfono + Monto (Recomendación BDV)
+        tx = False
+        if referencia:
+            # Primero buscamos por referencia del banco (es única por transacción)
+            tx = self.search([
+                ('bdv_referencia', '=', referencia),
+            ], limit=1)
+            if tx:
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} encontrada por referencia: {referencia}")
+
         # ==========================================================
-        tx = self.search([
-            ('bdv_telefono_pagador', '=', telefono_pagador),
-            ('bdv_importe', '=', monto),
-            # Eliminamos el filtro de estado para encontrar también las 'done'
-        ], limit=1).filtered(lambda t: t.state in ['draft', 'pending', 'done'])
+        # BÚSQUEDA SECUNDARIA: Por Teléfono + Monto (PRIORIDAD 2)
+        # ==========================================================
+        if not tx and telefono_pagador and monto:
+            # Si no hay referencia o no se encontró, buscamos por teléfono+monto
+            tx = self.search([
+                ('bdv_telefono_pagador', '=', telefono_pagador),
+                ('bdv_importe', '=', monto),
+            ], limit=1)
+            if tx:
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} encontrada por teléfono+monto")
 
         # ==========================================================
         # ESCENARIO A: Transacción encontrada
         # ==========================================================
         if tx:
-
+            # 🔥 CRÍTICO: Si ya está 'done', es re-notificación → Código 01
             if tx.state == 'done':
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya está completada → Código 01 (Re-notificación)")
-                return {'codigo': '01'}  # ✅ Retorna 01 para re-notificaciones
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya completada → Código 01")
+                return {'codigo': '01'}
+            
+            # Si está en 'draft' o 'pending', la procesamos normalmente
             
             # Actualizar con los datos reales del banco y marcar como pagada
             vals_to_write = {
