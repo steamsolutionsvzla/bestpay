@@ -123,7 +123,7 @@ class ResPartnerBDV(models.Model):
         help="Color hexadecimal principal para el checkout (bordes, detalles, etc).",
     )
 
-        # =====================================================
+    # =====================================================
     #  DATOS DE PAGO MÓVIL (Para mostrar en checkout)
     # =====================================================
     bestpay_pagomovil_telefono = fields.Char(
@@ -137,6 +137,13 @@ class ResPartnerBDV(models.Model):
     bestpay_pagomovil_banco = fields.Char(
         string="Banco Pago Móvil",
         help="Banco del comercio para pagos móviles (ej: Banco de Venezuela).",
+    )
+
+    bestpay_pagomovil_qr = fields.Binary(
+    string="QR Pago Móvil",
+    attachment=True,
+    help="Imagen del QR generado desde la app del Banco de Venezuela. "
+         "Se mostrará al cliente en el checkout para que escanee y realice el pago."
     )
 
      # =====================================================

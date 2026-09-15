@@ -259,6 +259,25 @@
                                                                 </button>
                                                             </div>
 
+                                                            <t t-if="comercio.get('pagomovil_qr_url')">
+                                                                <div class="text-center mb-4">
+                                                                    <label class="form-label fw-bold mb-2" style="color:#0033a0;">
+                                                                        <i class="fa fa-qrcode me-2"></i>Escanea este QR con tu app bancaria
+                                                                    </label>
+                                                                    <div class="bg-white p-3 rounded-3" 
+                                                                        style="border:3px solid #0033a0; box-shadow:0 4px 12px rgba(0,51,160,0.15); display:inline-block;">
+                                                                        <img t-att-src="comercio['pagomovil_qr_url']" 
+                                                                            alt="QR Pago Móvil" 
+                                                                            class="img-fluid"
+                                                                            style="max-width:280px; width:100%; height:auto;"/>
+                                                                    </div>
+                                                                    <p class="text-muted small mt-2 mb-0">
+                                                                        <i class="fa fa-info-circle me-1"></i>
+                                                                        Abre tu app bancaria → Pago Móvil → Escanear QR
+                                                                    </p>
+                                                                </div>
+                                                            </t>
+
                                                             <!-- Botón Continuar -->
                                                             <div class="d-grid gap-2 mt-3">
                                                                 <button type="button" 

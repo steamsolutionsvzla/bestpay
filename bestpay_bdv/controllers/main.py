@@ -74,6 +74,8 @@ class BestpayBDVController(http.Controller):
                 'pagomovil_telefono': partner.bestpay_pagomovil_telefono or '',
                 'pagomovil_rif': partner.bestpay_pagomovil_rif or '',
                 'pagomovil_banco': partner.bestpay_pagomovil_banco or '',
+                # 🆕 QR de Pago Móvil
+                'pagomovil_qr_url': f"/web/image/res.partner/{partner.id}/bestpay_pagomovil_qr" if partner.bestpay_pagomovil_qr else False,
             }
             
             # Renderiza el formulario de Pago Móvil

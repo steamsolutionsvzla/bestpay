@@ -115,12 +115,18 @@
 
                         <!-- 📱 DATOS DE PAGO MÓVIL (NUEVO) -->
                         <group string="Datos de Pago Móvil (Checkout)" invisible="not is_api_client">
-                               <field name="bestpay_pagomovil_rif" 
-                                    placeholder="J-123456789"/> 
-                                <field name="bestpay_pagomovil_telefono" 
-                                    placeholder="04161234567"/>
-                                <field name="bestpay_pagomovil_banco" 
-                                    placeholder="Banco de Venezuela"/>
+                            <field name="bestpay_pagomovil_rif" 
+                                placeholder="J-123456789"/> 
+                            <field name="bestpay_pagomovil_telefono" 
+                                placeholder="04161234567"/>
+                            <field name="bestpay_pagomovil_banco" 
+                                placeholder="Banco de Venezuela"/>
+                            <!-- 🆕 QR de Pago Móvil -->
+                            <field name="bestpay_pagomovil_qr" 
+                                widget="image"
+                                class="oe_avatar"
+                                options="{'size': [300, 300]}"
+                                help="Sube aquí el QR generado desde la app del BDV"/>
                         </group>
                     </group>
 
