@@ -152,7 +152,7 @@ class PaymentTransaction(models.Model):
             
             # 4. Al tercero solo le devolvemos el link seguro de nuestro Odoo
             return {
-                "redirect_url": redirect_url_odoo
+                "payment_link": redirect_url_odoo
             }
             
         return super()._bestpay_process_transaction_with_bank(api_kwargs)

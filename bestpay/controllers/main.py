@@ -78,7 +78,7 @@ class BestPayApiController(http.Controller):
                         'odoo_reference': transaccion_existente.reference,
                         'external_reference': transaccion_existente.external_reference,
                         'uuid_hash': transaccion_existente.uuid_hash,
-                        'checkout_url': transaccion_existente.payment_link,
+                        'payment_link': transaccion_existente.payment_link,
                         'transaction_status': 'done',
                         'message': 'Esta orden ya fue pagada.',
                     }
@@ -92,7 +92,7 @@ class BestPayApiController(http.Controller):
                         'odoo_reference': transaccion_existente.reference,
                         'external_reference': transaccion_existente.external_reference,
                         'uuid_hash': transaccion_existente.uuid_hash,
-                        'checkout_url': transaccion_existente.payment_link,
+                        'payment_link': transaccion_existente.payment_link,
                         'transaction_status': transaccion_existente.state,
                     }
 
@@ -265,7 +265,7 @@ class BestPayApiController(http.Controller):
             'odoo_reference': tx.reference,
             'external_reference': tx.external_reference,
             'uuid_hash': tx.uuid_hash,
-            'checkout_url': datos_banco.get('payment_link') or datos_banco.get('checkout_url'),
+            'payment_link': datos_banco.get('payment_link') or datos_banco.get('checkout_url'),
             'flow_type': tx.bestpay_flow_type,
             'payment_details': datos_banco
         }

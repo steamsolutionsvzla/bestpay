@@ -443,7 +443,7 @@ class BestpayBDVController(http.Controller):
                 return {
                     'success': True,
                     'message': 'Pago aprobado exitosamente.',
-                    'redirect_url': success_url,
+                    'payment_link': success_url,
                     'end_to_end_id': transaction.bdv_c2p_end_to_end_id
                 }
             else:
