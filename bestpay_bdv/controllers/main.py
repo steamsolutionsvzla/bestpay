@@ -170,18 +170,29 @@ class BestpayBDVController(http.Controller):
             # Convertir string a date object
             fecha_pago = datetime.strptime(fecha_pago_str, '%Y-%m-%d').date()
             
-            # Validar que no sea mayor a 3 días atrás (regla del BDV)
             hoy = fields.Date.today()
             dias_diferencia = (hoy - fecha_pago).days
             
             if dias_diferencia < 0:
                 raise UserError("La fecha del pago no puede ser futura.")
-            elif dias_diferencia > 3:
+            
+            # La regla estricta de 3 días SOLO aplica en PRODUCCIÓN.
+            # En QA, el banco exige usar fechas específicas de prueba (ej: 02/12/2023).
+            if env_type != 'qa' and dias_diferencia > 3:
                 raise UserError("El BDV solo permite conciliar pagos de los últimos 3 días. "
                               f"Fecha del pago: {fecha_pago.strftime('%d/%m/%Y')}. "
                               f"Hoy es: {hoy.strftime('%d/%m/%Y')}.")
             
-            _logger.info(f"[BDV] Fecha del pago validada: {fecha_pago} ({dias_diferencia} días atrás)")
+            _logger.info(f"[BDV] Fecha del pago validada: {fecha_pago} ({dias_diferencia} días atrás) - Ambiente: {env_type.upper()}")
+            
+        except ValueError:
+            raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")
+        except UserError:
+            raise
+        except Exception as e:
+            _logger.error(f"[BDV] Error procesando fecha: {str(e)}")
+            raise UserError("Error al procesar la fecha del pago.")
+        # =====================================================
             
         except ValueError:
             raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")
