@@ -201,15 +201,23 @@ class PaymentTransactionBDV(models.Model):
             fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
             _logger.info(f"[BDV] 🟢 QA: Usando fecha: {fecha_pago}")
 
+        # Determinar el teléfono destino según el ambiente (QA vs Producción)
+        if env_type == 'qa' and self.partner_id.bdv_telefono_destino_qa:
+            telefono_destino = self.partner_id.bdv_telefono_destino_qa
+        else:
+            telefono_destino = self.partner_id.bdv_telefono_destino or creds.get('telefono_destino', '')
+            
+        _logger.info(f"[BDV] Teléfono destino seleccionado ({env_type.upper()}): {telefono_destino}")
+
         payload = {
             "cedulaPagador": self.bdv_cedula_pagador or '',
             "telefonoPagador": self.bdv_telefono_pagador or '',
-            "telefonoDestino": creds['telefono_destino'],
+            "telefonoDestino": telefono_destino,  # ← AHORA USA LA VARIABLE DINÁMICA
             "referencia": self.bdv_referencia or '',
-            "fechaPago": fecha_pago,  # ← AHORA USARÁ LA VARIABLE CORREGIDA
+            "fechaPago": fecha_pago,
             "importe": f"{self.bdv_importe:.2f}",
             "bancoOrigen": self.bdv_banco_origen or '',
-            "reqCed": self.bdv_req_ced, # ← ASEGÚRATE DE QUE ESTO ESTÉ MARCADO EN ODOO
+            "reqCed": self.bdv_req_ced,
         }
 
         headers = {
