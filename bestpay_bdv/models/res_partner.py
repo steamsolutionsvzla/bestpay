@@ -36,6 +36,12 @@ class ResPartnerBDV(models.Model):
         help="Número de teléfono al que este comercio recibe los pagos móviles (formato: 04XXXXXXXXX).",
         copy=False,
     )
+    
+    bdv_telefono_destino_qa = fields.Char(
+    string="Teléfono Destino BDV (QA)",
+    help="Número de teléfono al que este comercio recibe los pagos móviles en QA/Pruebas (formato: 04XXXXXXXXX).",
+    copy=False,
+    )
 
     # C2P
 

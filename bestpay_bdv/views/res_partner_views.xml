@@ -26,6 +26,11 @@
                                        string="API Key BDV (Producción)"
                                        widget="password_toggle"
                                        placeholder="Ej: 34F2AE8C4FBF39C5A031348C84F21D9A"/>
+                                <field name="bdv_telefono_destino_qa"
+                                        string="Teléfono Destino (QA)"
+                                        placeholder="04141234567"
+                                        invisible="bdv_environment == 'prod'"
+                                        help="Teléfono para ambiente de pruebas QA"/>
                                 <field name="bdv_telefono_destino"
                                        placeholder="04127141363"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>

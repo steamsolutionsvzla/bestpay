@@ -213,6 +213,22 @@ class BestpayBDVController(http.Controller):
             'bdv_importe': importe_float,
         })
 
+        # =====================================================
+        # SELECCIONAR TELÉFONO DESTINO SEGÚN AMBIENTE
+        # =====================================================
+        env_type = transaction.provider_id.bdv_environment.strip().lower() if transaction.provider_id.bdv_environment else 'qa'
+
+        telefono_destino = (
+            transaction.partner_id.bdv_telefono_destino_qa 
+            if env_type == 'qa' and transaction.partner_id.bdv_telefono_destino_qa
+            else transaction.partner_id.bdv_telefono_destino
+        )
+
+        # Actualizar el teléfono destino en la transacción
+        transaction.bdv_telefono_destino = telefono_destino
+        _logger.info(f"[BDV] Teléfono destino seleccionado ({env_type.upper()}): {telefono_destino}")
+        # =====================================================
+
         # Llamar al método de conciliación (el que creamos en el modelo)
         try:
             is_approved = transaction.bdv_send_conciliation()
