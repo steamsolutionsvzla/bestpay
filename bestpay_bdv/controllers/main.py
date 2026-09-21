@@ -224,8 +224,6 @@ class BestpayBDVController(http.Controller):
             else transaction.partner_id.bdv_telefono_destino
         )
 
-        # Actualizar el teléfono destino en la transacción
-        transaction.bdv_telefono_destino = telefono_destino
         _logger.info(f"[BDV] Teléfono destino seleccionado ({env_type.upper()}): {telefono_destino}")
         # =====================================================
 
