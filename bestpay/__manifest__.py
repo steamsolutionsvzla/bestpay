@@ -17,6 +17,7 @@
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
         'views/payment_provider_views.xml',
+        'views/res_currency_views.xml', 
     ],
 
     'installable': True,

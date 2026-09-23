@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- 1. Inyección en la Vista de Lista (En Odoo 19 se usa 'list' en lugar de 'tree') -->
+    <record id="view_currency_tree_inherit_bestpay" model="ir.ui.view">
+        <field name="name">res.currency.tree.inherit.bestpay</field>
+        <field name="model">res.currency</field>
+        <field name="inherit_id" ref="base.view_currency_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="inside">
+                <field name="bestpay_eur_bcv_rate" 
+                       string="Tasa BCV Euro" 
+                       invisible="name != 'EUR'"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- 2. Inyección en la Vista de Formulario -->
+    <record id="view_currency_form_inherit_bestpay" model="ir.ui.view">
+        <field name="name">res.currency.form.inherit.bestpay</field>
+        <field name="model">res.currency</field>
+        <field name="inherit_id" ref="base.view_currency_form"/>
+        <field name="arch" type="xml">
+            <!-- Lo inyectamos justo antes del notebook (historial de tasas) para que quede limpio -->
+            <xpath expr="//notebook" position="before">
+                <group string="Información BCV BestPay" invisible="name != 'EUR'">
+                    <field name="bestpay_eur_bcv_rate" readonly="1" string="Tasa Oficial BCV (€/Bs)"/>
+                </group>
+            </xpath>
+
+                        <!-- Columna exclusiva en el histórico de tasas (pestaña Tasas) -->
+            <xpath expr="//field[@name='rate_ids']/list" position="inside">
+                <field name="bestpay_bcv_rate" 
+                       string="Tasa BCV (€/Bs)" 
+                       readonly="1" 
+                       column_invisible="parent.name != 'EUR'"/>
+            </xpath>
+            
+        </field>
+    </record>
+</odoo>

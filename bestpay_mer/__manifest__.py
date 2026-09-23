@@ -12,6 +12,7 @@
         'security/ir.model.access.csv',
         'data/payment_processing_page.xml',
         'data/payment_provider_data.xml',
+        'data/ir_cron.xml',
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
     ],

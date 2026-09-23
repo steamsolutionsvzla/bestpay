@@ -2,6 +2,10 @@
 import json
 import logging
 import requests
+import hmac
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
@@ -140,6 +144,35 @@ class PaymentTransactionBDV(models.Model):
     c2p_annulment_request_log = fields.Text(string="C2P Annulment Request", readonly=True)
     c2p_annulment_response_log = fields.Text(string="C2P Annulment Response", readonly=True)
 
+        # =================================================================
+    # 🔔 CAMPOS DE CONTROL DEL WEBHOOK AL TERCERO
+    # =================================================================
+    # TODO [MIGRACIÓN FASE 7]: Mover estos campos al módulo base 'bestpay'
+    # junto con los campos del partner, para que sean comunes a BDV y Mercantil.
+    bestpay_webhook_state = fields.Selection([
+        ('pending', 'Pendiente'),
+        ('sent', 'Enviado'),
+        ('failed', 'Fallido'),
+        ('done', 'Confirmado por el tercero'),
+    ], string="Estado Webhook 3ro", copy=False, index=True,
+       help="Estado del webhook saliente hacia el sistema del tercero.")
+    bestpay_webhook_attempts = fields.Integer(
+        string="Intentos de Webhook", default=0, copy=False,
+        help="Número de veces que se ha intentado enviar el webhook.")
+    bestpay_webhook_last_error = fields.Text(
+        string="Último Error del Webhook", copy=False, readonly=True)
+    bestpay_webhook_event_id = fields.Char(
+        string="ID de Evento Webhook", copy=False, index=True,
+        help="Identificador único del evento (para idempotencia del tercero).")
+    bestpay_webhook_sent_at = fields.Datetime(
+        string="Enviado a las", copy=False, readonly=True)
+    bestpay_webhook_next_retry = fields.Datetime(
+        string="Próximo Reintento", copy=False, index=True,
+        help="Fecha/hora del próximo intento de envío si falló.")
+    MAX_WEBHOOK_ATTEMPTS = 5  # Constante: máximo de reintentos
+    # Backoff exponencial en minutos: 2, 5, 30, 120, 360
+    WEBHOOK_BACKOFF_MINUTES = [2, 5, 30, 120, 360]
+
     def bdv_send_conciliation(self):
         """
         Envía los datos del pago móvil al BDV para conciliación.
@@ -147,28 +180,41 @@ class PaymentTransactionBDV(models.Model):
         """
         self.ensure_one()
         provider = self.provider_id
-
         if provider.code != 'bdv':
             raise UserError("Este método solo aplica para el proveedor BDV.")
 
         # 1. Obtener credenciales del provider, pasando el partner (comercio)
-        # para que tome la API Key y teléfono destino del partner, no del provider
         creds = provider.bdv_get_api_credentials(partner=self.partner_id)
-        
         if not creds['api_key']:
             raise UserError("Falta configurar la API Key del BDV en el proveedor de pago.")
 
         # 2. Construir el payload que pide el BDV
-        # Usar fecha de prueba si está configurada, sino usar fecha actual
-        test_date = creds.get('test_date')
-        fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
-        
+        # CORRECCIÓN CRÍTICA: Forzar fecha real en Producción
+        env_type = creds.get('environment', 'qa')
+        if env_type == 'prod':
+            # En PRODUCCIÓN: Ignorar test_date y usar la fecha real del pago o la de hoy
+            fecha_pago = str(self.bdv_fecha_pago or fields.Date.today())
+            _logger.info(f"[BDV] 🔵 PRODUCCIÓN: Usando fecha real: {fecha_pago}")
+        else:
+            # En QA: Usar la fecha de prueba si existe
+            test_date = creds.get('test_date')
+            fecha_pago = test_date if test_date else str(self.bdv_fecha_pago or fields.Date.today())
+            _logger.info(f"[BDV] 🟢 QA: Usando fecha: {fecha_pago}")
+
+        # Determinar el teléfono destino según el ambiente (QA vs Producción)
+        if env_type == 'qa' and self.partner_id.bdv_telefono_destino_qa:
+            telefono_destino = self.partner_id.bdv_telefono_destino_qa
+        else:
+            telefono_destino = self.partner_id.bdv_telefono_destino or creds.get('telefono_destino', '')
+            
+        _logger.info(f"[BDV] Teléfono destino seleccionado ({env_type.upper()}): {telefono_destino}")
+
         payload = {
             "cedulaPagador": self.bdv_cedula_pagador or '',
             "telefonoPagador": self.bdv_telefono_pagador or '',
-            "telefonoDestino": creds['telefono_destino'],
+            "telefonoDestino": telefono_destino,  # ← AHORA USA LA VARIABLE DINÁMICA
             "referencia": self.bdv_referencia or '',
-            "fechaPago": fecha_pago,  # ← CAMBIAR ESTA LÍNEA
+            "fechaPago": fecha_pago,
             "importe": f"{self.bdv_importe:.2f}",
             "bancoOrigen": self.bdv_banco_origen or '',
             "reqCed": self.bdv_req_ced,
@@ -197,7 +243,6 @@ class PaymentTransactionBDV(models.Model):
             )
             response.raise_for_status()
             respuesta = response.json()
-
             _logger.info(f"[BDV] Respuesta recibida: {respuesta}")
 
             # 5. Guardar la respuesta cruda
@@ -213,44 +258,34 @@ class PaymentTransactionBDV(models.Model):
                     'bdv_conciliation_state': 'approved',
                     'bdv_conciliation_message': message,
                     'state': 'done',
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
+                self._bestpay_trigger_webhook_3ro()
                 return True
-
             elif code == 1010:
                 # ❌ PAGO RECHAZADO
                 self.write({
                     'bdv_conciliation_state': 'rejected',
                     'bdv_conciliation_message': message,
                     'state': 'cancel',
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {message}")
                 return False
-
             else:
                 # ⚠️ CÓDIGO DESCONOCIDO
                 self.write({
                     'bdv_conciliation_state': 'error',
                     'bdv_conciliation_message': f"Código inesperado: {code} - {message}",
-                    'bank_in_log': json.dumps(respuesta, indent=2, ensure_ascii=False),
                 })
                 _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
                 return False
 
         except requests.exceptions.RequestException as e:
-            # ❌ ERROR DE CONEXIÓN - Sin simulación, solo registro del error
             _logger.error(f"[BDV] Error de conexión: {str(e)}")
-            
             self.write({
                 'bdv_conciliation_state': 'error',
                 'bdv_conciliation_message': f"Error de conexión: {str(e)}",
                 'state': 'error',
-                'bank_in_log': json.dumps({
-                    'error': str(e),
-                    'payload_sent': payload,
-                }, indent=2, ensure_ascii=False),
             })
             raise UserError(f"Error de conexión con el BDV: {str(e)}")
     
@@ -309,11 +344,34 @@ class PaymentTransactionBDV(models.Model):
 
         _logger.info("[BDV] Link generado con UUID_HASH para TX %s: %s", self.id, payment_link)
 
-        return {
+        datos_banco = {
             'payment_link': payment_link,
             'uuid_hash': self.uuid_hash,
             'flow_type': 'redirect',
         }
+
+        # Guardar la respuesta que se le enviará al tercero cuando el proveedor es BDV.
+        # Wilson indicó que este log debe contener los datos relevantes para el 3ro:
+        # link de pago, referencia Odoo y hash de la operación.
+        respuesta_cliente = {
+            'status': 'success',
+            'transaction_id': self.id,
+            'odoo_reference': self.reference,
+            'external_reference': self.external_reference,
+            'uuid_hash': self.uuid_hash,
+            'flow_type': self.bestpay_flow_type or 'redirect',
+            'payment_details': datos_banco,
+        }
+
+        self.write({
+            'payment_request_response': json.dumps(
+                respuesta_cliente,
+                ensure_ascii=False,
+                indent=4
+            )
+        })
+
+        return datos_banco
 
     # =========================================================================
     # MÉTODOS API C2P CUENTAS MÚLTIPLES (BDV)
@@ -341,6 +399,24 @@ class PaymentTransactionBDV(models.Model):
             "Accept": "application/json"
         }
 
+    def _bdv_c2p_log_stage(self, stage, request_payload=None, response_payload=None):
+        """Agrega (append) un bloque de log por etapa C2P con encabezado.
+        Salida (peticion) -> bank_out_log | Entrada (respuesta) -> bank_in_log."""
+        def dump(data):
+            try:
+                return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            except Exception:
+                return str(data)
+        vals = {}
+        if request_payload is not None:
+            vals['bank_out_log'] = (self.bank_out_log or '') + \
+                f"=== SALIDA · {stage} ===\n{dump(request_payload)}\n\n"
+        if response_payload is not None:
+            vals['bank_in_log'] = (self.bank_in_log or '') + \
+                f"=== ENTRADA · {stage} ===\n{dump(response_payload)}\n\n"
+        if vals:
+            self.write(vals)
+
     def bdv_c2p_generate_otp(self):
         """Paso 1: Solicita al BDV el envío del OTP al cliente."""
         self.ensure_one()
@@ -352,7 +428,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P OTP Request: {url} | Payload: {payload}")
         
         # Guardar el request en bank_out_log (salida al banco)
-        self.write({'bank_out_log': json.dumps(payload, indent=2)})
+        self._bdv_c2p_log_stage("GENERATE OTP", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
@@ -360,7 +436,7 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P OTP Response: {data}")
             
             # Guardar la respuesta en bank_in_log (entrada del banco)
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("GENERATE OTP", response_payload=data)
             
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'otp_sent'})
@@ -369,7 +445,7 @@ class PaymentTransactionBDV(models.Model):
             self.write({'bdv_c2p_status': 'error', 'state_message': data.get('message')})
             raise UserError(f"Error generando OTP: {data.get('message')}")
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("GENERATE OTP · ERROR", response_payload={'error': str(e)})
             raise
 
     def bdv_c2p_process_payment(self):
@@ -411,7 +487,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P Process Request: {url} | Payload: {payload}")
         
         # Guardar el request
-        self.write({'bank_out_log': json.dumps(payload, indent=2, ensure_ascii=False)})
+        self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=20)
@@ -419,7 +495,7 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P Process Response: {data}")
             
             # Guardar la respuesta
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", response_payload=data)
 
             if data.get('code') == '1000' and data.get('data'):
                 response_data = data['data']
@@ -430,6 +506,9 @@ class PaymentTransactionBDV(models.Model):
                     'state': 'done',
                     'state_message': 'Pago C2P aprobado por el BDV'
                 })
+
+                # 🔔 Disparar webhook al tercero (asíncrono, lo procesa el cron)
+                self._bestpay_trigger_webhook_3ro()
                 return {'success': True, 'data': response_data}
             
             self.write({
@@ -439,7 +518,7 @@ class PaymentTransactionBDV(models.Model):
             })
             return {'success': False, 'message': data.get('message')}
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP) · ERROR", response_payload={'error': str(e)})
             raise
 
     def bdv_c2p_annul(self):
@@ -458,7 +537,7 @@ class PaymentTransactionBDV(models.Model):
         _logger.info(f"BDV C2P Annul Request: {url} | Payload: {payload}")
         
         # Guardar el request
-        self.write({'bank_out_log': json.dumps(payload, indent=2)})
+        self._bdv_c2p_log_stage("ANULACION", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
@@ -466,12 +545,331 @@ class PaymentTransactionBDV(models.Model):
             _logger.info(f"BDV C2P Annul Response: {data}")
             
             # Guardar la respuesta
-            self.write({'bank_in_log': json.dumps(data, indent=2, ensure_ascii=False)})
+            self._bdv_c2p_log_stage("ANULACION", response_payload=data)
 
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'annulled', 'state': 'cancel'})
                 return True
             return False
         except Exception as e:
-            self.write({'bank_in_log': json.dumps({'error': str(e)}, indent=2)})
+            self._bdv_c2p_log_stage("ANULACION · ERROR", response_payload={'error': str(e)})
             raise
+    
+        # =================================================================
+    # 🔔 MÉTODOS DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
+    # =================================================================
+    # TODO [MIGRACIÓN FASE 7]: Mover toda esta lógica al módulo base 'bestpay'
+    # para que sea reutilizada por Mercantil. Al migrar, estos métodos deben
+    # vivir en 'bestpay/models/payment_transaction.py'.
+    def _bestpay_trigger_webhook_3ro(self):
+        """
+        Dispara el webhook al tercero. Intenta envío inmediato; si falla, lo deja para el cron.
+        Esto mejora la UX: el padre ve la deuda pagada al instante en el 95% de los casos.
+        """
+        self.ensure_one()
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_active:
+            _logger.info("[BESTPAY WEBHOOK] TX %s: no configurado o desactivado.", self.id)
+            return
+        
+        # Generar event_id si no existe
+        event_id = self.bestpay_webhook_event_id or f"evt_{secrets.token_urlsafe(24)}"
+        self.write({
+            'bestpay_webhook_event_id': event_id,
+            'bestpay_webhook_state': 'pending',  # Temporal durante el intento
+            'bestpay_webhook_attempts': 0,
+            'bestpay_webhook_next_retry': False,
+        })
+        
+        # 🚀 INTENTO SÍNCRONO INMEDIATO
+        _logger.info("[BESTPAY WEBHOOK] TX %s: Intento síncrono inmediato...", self.id)
+        self._bestpay_send_webhook_3ro()
+
+    def _bestpay_build_webhook_payload_3ro(self):
+        """Construye el payload JSON que se enviará al tercero."""
+        self.ensure_one()
+        # Recolectar datos bancarios según el método usado
+        bank_data = {}
+        if self.payment_method_id.code == 'bdv_c2p':
+            bank_data = {
+                'end_to_end_id': self.bdv_c2p_end_to_end_id or False,
+                'bank_reference': self.bdv_c2p_reference_generated or False,
+                'approval_code': False,
+            }
+        else:
+            # Pago Móvil: los datos están en la respuesta del banco (bank_in_log)
+            try:
+                bank_response = json.loads(self.bank_in_log or '{}')
+                data = bank_response.get('data', {}) if isinstance(bank_response, dict) else {}
+                bank_data = {
+                    'end_to_end_id': data.get('endToEndId') or data.get('end_to_end_id') or False,
+                    'bank_reference': data.get('referencia') or self.bdv_referencia or False,
+                    'approval_code': data.get('approvalCode') or False,
+                }
+            except (ValueError, AttributeError):
+                bank_data = {'bank_reference': self.bdv_referencia or False}
+
+        return {
+            'event_id': self.bestpay_webhook_event_id,
+            'event_type': 'payment.done',
+            'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'transaction': {
+                'uuid_hash': self.uuid_hash,
+                'reference': self.reference,
+                'provider': self.provider_id.code,
+                'payment_method': self.payment_method_id.code if self.payment_method_id else False,
+                'external_reference': self.external_reference,
+                'amount': float(self.amount),
+                'currency': self.currency_id.name if self.currency_id else False,
+                'amount_ves': float(self.amount_ves or 0.0),
+                'exchange_rate_bcv': float(self.exchange_rate_bcv or 0.0),
+                'state': self.state,
+                'client_note': self.client_note or '',
+            },
+            'bank_data': bank_data,
+        }
+
+    def _bestpay_compute_webhook_signature_3ro(self, payload_str, secret):
+        """Calcula la firma HMAC-SHA256 del payload usando el secreto compartido."""
+        return hmac.new(
+            key=secret.encode('utf-8'),
+            msg=payload_str.encode('utf-8'),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
+    @api.model
+    def _bestpay_process_pending_webhooks(self):
+        """
+        Método invocado por el CRON cada 2 minutos.
+        Procesa todas las transacciones con webhook pendiente o con reintento programado.
+        """
+        now = fields.Datetime.now()
+        # Buscar transacciones candidatas:
+        # - webhook pendiente O fallido con intentos < MAX
+        # - próxima hora de reintento ya alcanzada
+        candidates = self.search([
+            ('bestpay_webhook_state', 'in', ['pending', 'failed']),
+            ('bestpay_webhook_attempts', '<', self.MAX_WEBHOOK_ATTEMPTS),
+            '|',
+            ('bestpay_webhook_next_retry', '<=', now),
+            ('bestpay_webhook_next_retry', '=', False),
+        ], limit=20)  # Procesamos en lotes de 20 por ejecución de cron
+
+        _logger.info(
+            "[BESTPAY WEBHOOK CRON] Procesando %d transacciones candidatas.",
+            len(candidates)
+        )
+
+        for tx in candidates:
+            tx._bestpay_send_webhook_3ro()
+
+    def _bestpay_send_webhook_3ro(self):
+        """Envía el webhook al tercero (un intento). Actualiza el estado."""
+        self.ensure_one()
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_secret:
+            _logger.warning(
+                "[BESTPAY WEBHOOK] TX %s sin URL o secreto. Se marca como fallido permanente.",
+                self.id
+            )
+            self.write({
+                'bestpay_webhook_state': 'failed',
+                'bestpay_webhook_last_error': 'URL o secreto no configurados en el partner.',
+                'bestpay_webhook_attempts': self.MAX_WEBHOOK_ATTEMPTS,  # No reintenta más
+            })
+            return
+
+        try:
+            payload = self._bestpay_build_webhook_payload_3ro()
+            # Serialización estable: sort_keys para garantizar misma firma siempre
+            payload_str = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+            signature = self._bestpay_compute_webhook_signature_3ro(payload_str, partner.bestpay_webhook_secret)
+
+            headers = {
+                'Content-Type': 'application/json; charset=utf-8',
+                'X-BestPay-Signature': f'sha256={signature}',
+                'X-BestPay-Event-ID': self.bestpay_webhook_event_id or '',
+                'User-Agent': 'BestPay-Webhook/1.0',
+            }
+
+            _logger.info(
+                "[BESTPAY WEBHOOK] TX %s → %s (intento %d/%d)",
+                self.id, partner.webhook_url_3ro,
+                self.bestpay_webhook_attempts + 1, self.MAX_WEBHOOK_ATTEMPTS
+            )
+
+            response = requests.post(
+                partner.webhook_url_3ro,
+                data=payload_str,
+                headers=headers,
+                timeout=10,
+            )
+
+            # Guardar respuesta en el campo existente de logs
+            response_snapshot = json.dumps({
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'body': response.text[:2000],
+                'timestamp': datetime.utcnow().isoformat(),
+            }, ensure_ascii=False, indent=2)
+
+            if 200 <= response.status_code < 300:
+                # ✅ ÉXITO
+                self.write({
+                    'bestpay_webhook_state': 'done',
+                    'bestpay_webhook_attempts': self.bestpay_webhook_attempts + 1,
+                    'bestpay_webhook_sent_at': fields.Datetime.now(),
+                    'bestpay_webhook_last_error': False,
+                })
+                _logger.info("[BESTPAY WEBHOOK] ✅ TX %s confirmada por tercero (HTTP %s).",
+                             self.id, response.status_code)
+            else:
+                # ⚠️ Respuesta no-2xx → reintento
+                error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
+                self._bestpay_schedule_retry(error_msg)
+
+        except requests.exceptions.Timeout:
+            self._bestpay_schedule_retry("Timeout (10s) esperando respuesta del tercero.")
+        except requests.exceptions.ConnectionError as e:
+            self._bestpay_schedule_retry(f"Error de conexión: {str(e)[:200]}")
+        except Exception as e:
+            _logger.exception("[BESTPAY WEBHOOK] Error inesperado en TX %s", self.id)
+            self._bestpay_schedule_retry(f"Error inesperado: {str(e)[:200]}")
+
+    def _bestpay_schedule_retry(self, error_msg):
+        """Programa el próximo reintento con backoff exponencial."""
+        self.ensure_one()
+        attempts = self.bestpay_webhook_attempts + 1
+        if attempts >= self.MAX_WEBHOOK_ATTEMPTS:
+            # Ya no reintenta más
+            self.write({
+                'bestpay_webhook_state': 'failed',
+                'bestpay_webhook_attempts': attempts,
+                'bestpay_webhook_last_error': error_msg,
+            })
+            _logger.warning(
+                "[BESTPAY WEBHOOK] ❌ TX %s agotó %d intentos. Último error: %s",
+                self.id, attempts, error_msg
+            )
+            return
+
+        # Calcular próximo reintento usando backoff
+        backoff_idx = min(attempts - 1, len(self.WEBHOOK_BACKOFF_MINUTES) - 1)
+        minutes = self.WEBHOOK_BACKOFF_MINUTES[backoff_idx]
+        next_retry = datetime.utcnow() + timedelta(minutes=minutes)
+
+        self.write({
+            'bestpay_webhook_state': 'failed',
+            'bestpay_webhook_attempts': attempts,
+            'bestpay_webhook_last_error': error_msg,
+            'bestpay_webhook_next_retry': next_retry,
+        })
+        _logger.info(
+            "[BESTPAY WEBHOOK] ⏱️ TX %s reintentará en %d min (intento %d/%d). Error: %s",
+            self.id, minutes, attempts, self.MAX_WEBHOOK_ATTEMPTS, error_msg
+        )
+
+    def bdv_process_notification_webhook(self, payload, partner):
+        """
+        Procesa la notificación del BDV buscando la transacción por referencia (única).
+        """
+        # 1. Extraer y normalizar datos
+        telefono_pagador = payload.get('numeroCliente', '').strip()
+        monto_str = payload.get('monto', '0.0')
+        referencia = payload.get('referenciaBancoOrdenante', '').strip()
+        cedula_pagador = payload.get('idCliente', '').strip()
+        banco_origen = payload.get('bancoOrdenante', '').strip()
+        
+        try:
+            monto = float(monto_str)
+        except (ValueError, TypeError):
+            monto = 0.0
+
+        # Normalizar teléfono (asegurar que empiece con 0)
+        if telefono_pagador and not telefono_pagador.startswith('0'):
+            telefono_pagador = '0' + telefono_pagador
+
+        _logger.info(f"[BDV NOTIFICACIÓN] Procesando: Referencia={referencia}, Tel={telefono_pagador}, Monto={monto}")
+
+        # ==========================================================
+        # BÚSQUEDA PRIORITARIA: Por Referencia (ÚNICA)
+        # ==========================================================
+        tx = False
+        if referencia:
+            tx = self.search([
+                ('bdv_referencia', '=', referencia),
+            ], limit=1)
+            if tx:
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} encontrada por referencia: {referencia}")
+
+        # ==========================================================
+        # ESCENARIO A: Transacción encontrada por referencia
+        # ==========================================================
+        if tx:
+            # Si ya está 'done', es re-notificación → Código 01
+            if tx.state == 'done':
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya completada → Código 01 (Re-notificación)")
+                return {'codigo': '01'}
+            
+            # Si está en 'draft' o 'pending', la procesamos normalmente
+            vals_to_write = {
+                'state': 'done',
+                'bdv_conciliation_state': 'approved',
+                'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+            }
+            if not tx.bdv_banco_origen and banco_origen:
+                vals_to_write['bdv_banco_origen'] = banco_origen
+            if not tx.bdv_cedula_pagador and cedula_pagador and not cedula_pagador.startswith('V'):
+                vals_to_write['bdv_cedula_pagador'] = cedula_pagador
+
+            tx.write(vals_to_write)
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Referencia: {referencia})")
+            
+            try:
+                tx._bestpay_trigger_webhook_3ro()
+            except Exception as e:
+                _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook al tercero: {e}")
+            
+            return {'codigo': '00'}
+
+        # ==========================================================
+        # ESCENARIO B: NO existe TX con esa referencia → Crear nueva
+        # ==========================================================
+        _logger.info(f"[BDV NOTIFICACIÓN] Nueva transacción. Referencia: {referencia}, Tel: {telefono_pagador}, Monto: {monto}")
+
+        provider = self.env['payment.provider'].sudo().search([
+            ('code', '=', 'bdv'),
+            ('is_bestpay_provider', '=', True),
+        ], limit=1)
+
+        currency_ves = self.env['res.currency'].sudo().search([('name', '=', 'VES')], limit=1)
+
+        try:
+            new_tx = self.create({
+                'provider_id': provider.id if provider else False,
+                'partner_id': partner.id if partner else False,
+                'amount': monto,
+                'currency_id': currency_ves.id if currency_ves else False,
+                'amount_ves': monto,
+                'state': 'done',  # Marcar como pagada inmediatamente
+                'bdv_conciliation_state': 'approved',
+                'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+                'bdv_referencia': referencia,
+                'bdv_importe': monto,
+                'bdv_telefono_pagador': telefono_pagador,
+                'bdv_banco_origen': banco_origen,
+                'bdv_cedula_pagador': cedula_pagador if cedula_pagador else '',
+                'client_note': f"Pago notificado por BDV. Referencia: {referencia}",
+            })
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX creada: ID {new_tx.id}, Referencia: {referencia}")
+            
+            try:
+                new_tx._bestpay_trigger_webhook_3ro()
+            except Exception as e:
+                _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook: {e}")
+            
+            return {'codigo': '00'}
+            
+        except Exception as e:
+            _logger.error(f"[BDV NOTIFICACIÓN]  Error creando TX: {e}", exc_info=True)
+            return {'codigo': '00'}

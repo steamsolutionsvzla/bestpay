@@ -15,12 +15,22 @@
                     <div invisible="not allowed_provider_ids or %(bestpay_bdv.payment_provider_bdv)d not in allowed_provider_ids">
                         <group string="Credenciales del Banco de Venezuela">
                             
-                            <!-- GRUPO 1: Pago Móvil (Existente) -->
+                                                        <!-- GRUPO 1: Pago Móvil (Existente) -->
                             <group string="Pago Móvil">
                                 <field name="bdv_api_key"
-                                       password="True"
-                                       placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                        string="API Key BDV (QA)"
+                                        widget="password_toggle"
+                                        placeholder="Ej: 96R7T1T5J2134T5YFC2GF15SDFG4BD1Z"
+                                        invisible="bdv_environment == 'prod'"/>
+                                <field name="bdv_api_key_prod"
+                                       string="API Key BDV (Producción)"
+                                       widget="password_toggle"
+                                       placeholder="Ej: 34F2AE8C4FBF39C5A031348C84F21D9A"/>
+                                <field name="bdv_telefono_destino_qa"
+                                        string="Teléfono Destino (QA)"
+                                        placeholder="04141234567"
+                                        invisible="bdv_environment == 'prod'"
+                                        help="Teléfono para ambiente de pruebas QA"/>
                                 <field name="bdv_telefono_destino"
                                        placeholder="04127141363"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
@@ -29,12 +39,42 @@
                             <!-- GRUPO 2: C2P Cuentas Múltiples (NUEVO) -->
                             <group string="C2P Cuentas Múltiples">
                                 <field name="bdv_api_key_c2p"
-                                       password="True"
+                                       widget="password_toggle"
                                        placeholder="API Key específica para flujo C2P"
-                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                       invisible="bdv_environment == 'prod'"/>
                                 <field name="bdv_phone_destino_c2p"
                                        placeholder="Teléfono o Cuenta destino del comercio (C2P)"
                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+                            
+                            <!-- GRUPO 3: Notificación (NUEVO)            -->
+                            <group string="Notificación">
+                                    <field name="bdv_api_key_notification"
+                                        widget="password_toggle"
+                                        placeholder="Ej: 97F6F54EF1A84F3A24FE19A3B338C77A"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                        invisible="bdv_environment == 'prod'"/>
+                                    <field name="bdv_telefono_notificacion"
+                                        placeholder="04141234567"
+                                        required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"/>
+                            </group>
+
+                            <!-- GRUPO 4: Consulta de Movimientos (NUEVO) -->
+                            <group string="Consulta de Movimientos">
+                                <field name="bdv_api_key_movimientos"
+                                       widget="password_toggle"
+                                       placeholder="Ej: 256D0FDD36F1B1B3F1208A9B6EC693"
+                                       required="%(bestpay_bdv.payment_provider_bdv)d in allowed_provider_ids and is_api_client"
+                                       invisible="bdv_environment == 'prod'"/>
+                                <!-- Botón para consultar desde Odoo (Uso interno BestPay) -->
+                                <button name="action_bdv_consultar_movimientos" 
+                                        string="🔍 Consultar Movimientos" 
+                                        type="object" 
+                                        class="btn-primary"
+                                        icon="fa-search"
+                                        invisible="not bdv_api_key_movimientos"
+                                        groups="base.group_system"/>
                             </group>
 
                         </group>
@@ -46,6 +86,54 @@
                             ⚠️ Seleccione "Banco de Venezuela" en la lista de métodos de pago permitidos para habilitar sus campos de configuración.
                         </p>
                     </div>
+
+                    <!-- 🔔 Configuración de Webhook al Tercero -->
+                    <group string="Notificaciones al Tercero (Webhook)"
+                        invisible="not is_api_client">
+                        <group>
+                            <field name="webhook_url_3ro"
+                                placeholder="https://koole.midominio.com/api/bestpay/webhook"/>
+                            <field name="default_return_url_3ro"
+                                placeholder="https://koole.midominio.com/pago/resultado"/>
+                        </group>
+                        <group>
+                            <field name="bestpay_webhook_secret" widget="password_toggle"/>
+                            <field name="bestpay_webhook_active" widget="boolean_toggle"/>
+                        </group>
+                    </group>
+
+                    <!-- 🎨 DATOS DE PRESENTACIÓN EN CHECKOUT (NUEVO) -->
+                    <group string="Presentación en Checkout (Pago Móvil)" invisible="not is_api_client">
+                        <group>
+                            <field name="bestpay_checkout_title" 
+                                   placeholder="Ej: Mi Tienda Online (se usa el nombre del contacto si se deja vacío)"/>
+                            <field name="bestpay_checkout_primary_color" 
+                                   widget="color" 
+                                   placeholder="#0033a0"/>
+                        </group>
+                        <group>
+                            <field name="bestpay_checkout_message" 
+                                   widget="html" 
+                                   options="{'safe': True, 'codeview': True}"
+                                   placeholder="Ej: &lt;b&gt;Atención:&lt;/b&gt; Realice el Pago Móvil al teléfono que aparece abajo y luego registre los datos en este formulario."/>
+                        </group>
+
+                        <!-- 📱 DATOS DE PAGO MÓVIL (NUEVO) -->
+                        <group string="Datos de Pago Móvil (Checkout)" invisible="not is_api_client">
+                            <field name="bestpay_pagomovil_rif" 
+                                placeholder="J-123456789"/> 
+                            <field name="bestpay_pagomovil_telefono" 
+                                placeholder="04161234567"/>
+                            <field name="bestpay_pagomovil_banco" 
+                                placeholder="Banco de Venezuela"/>
+                            <!-- 🆕 QR de Pago Móvil -->
+                            <field name="bestpay_pagomovil_qr" 
+                                widget="image"
+                                class="oe_avatar"
+                                options="{'size': [300, 300]}"
+                                help="Sube aquí el QR generado desde la app del BDV"/>
+                        </group>
+                    </group>
 
                 </page>
             </xpath>

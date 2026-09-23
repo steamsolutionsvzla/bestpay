@@ -1,13 +1,83 @@
 # -*- coding: utf-8 -*-
 from odoo import http, fields
 from odoo.http import request
+from datetime import timedelta
 import json
 import logging
+import base64
+import binascii
 
 _logger = logging.getLogger(__name__)
 
 
 class BestPayApiController(http.Controller):
+
+    LINK_EXPIRATION_HOURS = 24  # Regla de negocio: los links de pago vencen a las 24h
+
+    def _bestpay_normalize_payment_details(self, payment_details):
+        if not isinstance(payment_details, dict):
+            return {}
+
+        normalized = dict(payment_details)
+        if not normalized.get('payment_link'):
+            for key in ('checkout_url', 'redirect_url', 'url', 'payment_url', 'link'):
+                value = normalized.get(key)
+                if value:
+                    normalized['payment_link'] = value
+                    break
+
+        if normalized.get('payment_link') and 'checkout_url' not in normalized:
+            normalized['checkout_url'] = normalized['payment_link']
+
+        return normalized
+
+    def _bestpay_extract_payment_link(self, tx=None, payment_details=None):
+        payment_details = self._bestpay_normalize_payment_details(payment_details or {})
+        if payment_details.get('payment_link'):
+            return payment_details['payment_link']
+
+        if tx:
+            for field_name in ('payment_link', 'payment_link_client_mer', 'payment_link_bank_mer'):
+                value = getattr(tx, field_name, False)
+                if value:
+                    return value
+
+        return False
+
+    def _bestpay_standard_response(self, tx=None, status='success', message='', transaction_status=None,
+                                  payment_details=None, payment_link=None):
+        payload = self._bestpay_normalize_payment_details(payment_details or {})
+        resolved_payment_link = payment_link or self._bestpay_extract_payment_link(tx=tx, payment_details=payload)
+
+        if tx:
+            response = {
+                'status': status,
+                'message': message,
+                'transaction_id': tx.id,
+                'odoo_reference': tx.reference,
+                'external_reference': tx.external_reference,
+                'uuid_hash': tx.uuid_hash,
+                'transaction_status': transaction_status or tx.state,
+                'payment_link': resolved_payment_link,
+                'flow_type': tx.bestpay_flow_type,
+                'payment_details': payload,
+            }
+        else:
+            response = {
+                'status': status,
+                'message': message,
+                'transaction_status': transaction_status,
+                'payment_link': resolved_payment_link,
+                'payment_details': payload,
+            }
+
+        if not response.get('payment_link') and payload:
+            response['payment_link'] = payload.get('payment_link')
+
+        if response.get('payment_details') is None:
+            response['payment_details'] = {}
+
+        return response
 
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
@@ -15,31 +85,45 @@ class BestPayApiController(http.Controller):
         auth_header = request.httprequest.headers.get('Authorization', '')
         
         if not auth_header.startswith('Basic '):
-            return {
-                'status': 'error',
-                'message': 'Autenticación requerida. Use Basic Auth con Client ID y Client Secret.'
-            }
-        
-        import base64
+            return self._bestpay_standard_response(
+                status='error',
+                message='Autenticación requerida. Use Basic Auth con Client ID y Client Secret.',
+                transaction_status='error'
+            )
+
         try:
-            credentials = base64.b64decode(auth_header[6:]).decode('utf-8')
-            client_id, client_secret = credentials.split(':', 1)
-        except (ValueError, UnicodeDecodeError):
-            return {'status': 'error', 'message': 'Credenciales Basic malformadas.'}
+            # Validamos que sea un token Basic bien formado y luego buscamos por el token codificado.
+            encoded_token = auth_header[6:].strip()
+            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
+            if ':' not in decoded_credentials:
+                raise ValueError('Formato inválido')
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            return self._bestpay_standard_response(
+                status='error',
+                message='Credenciales Basic malformadas.',
+                transaction_status='error'
+            )
 
         # Al usar auth='none', necesitamos forzar el uso de una base de datos
         if not request.db:
-            return {'status': 'error', 'message': 'Base de datos no especificada en la petición.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message='Base de datos no especificada en la petición.',
+                transaction_status='error'
+            )
 
         # 2. Validar que el cliente exista
         partner = request.env['res.partner'].sudo().search([
             ('is_api_client', '=', True),
-            ('bestpay_client_id', '=', client_id),
-            ('bestpay_client_secret', '=', client_secret),
+            ('bestpay_basic_token', '=', encoded_token),
         ], limit=1)
         
         if not partner:
-            return {'status': 'error', 'message': 'Credenciales inválidas o cliente no autorizado.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message='Credenciales inválidas o cliente no autorizado.',
+                transaction_status='error'
+            )
 
         # 3. Leer los datos directamente de kwargs (inyectados por type='json')
         provider_code = kwargs.get('provider')
@@ -50,39 +134,71 @@ class BestPayApiController(http.Controller):
 
         # Validaciones de campos obligatorios
         if not all([provider_code, currency_code, amount, external_reference]):
-            return {
-                'status': 'error', 
-                'message': 'Faltan campos obligatorios: (provider, currency, amount, external_reference).'
-            }
+            return self._bestpay_standard_response(
+                status='error',
+                message='Faltan campos obligatorios: (provider, currency, amount, external_reference).',
+                transaction_status='error'
+            )
         
         if external_reference:
-            # Buscamos si ya existe una transacción aprobada, pendiente o en borrador 
-            # para este mismo cliente con esa misma referencia externa.
-            transaccion_duplicada = request.env['payment.transaction'].sudo().search([
+            transaccion_existente = request.env['payment.transaction'].sudo().search([
                 ('bestpay_client_id', '=', partner.id),
                 ('external_reference', '=', external_reference),
-                # Dependiendo de tu lógica, puedes filtrar por estados no fallidos:
-                ('state', 'not in', ['cancel', 'error']) 
-            ], limit=1)
+                ('state', 'not in', ['cancel', 'error']),
+            ], limit=1, order='create_date desc')
 
-            if transaccion_duplicada:
-                return {
-                    'status': 'error',
-                    'message': f'Transacción duplicada. La referencia externa "{external_reference}" ya está registrada para este cliente.',
-                    # Opcional: Le devuelves los datos de la que ya existe por si necesita recuperarla
-                    'transaction_id': transaccion_duplicada.id,
-                    'odoo_reference': transaccion_duplicada.reference,
-                    'uuid_hash': transaccion_duplicada.uuid_hash,
-                    'transaction_status': dict(transaccion_duplicada._fields['state']._description_selection(request.env)).get(transaccion_duplicada.state),
-                }
+            if transaccion_existente:
+                # Caso 1: ya fue pagada -> nunca se crea una nueva, reutilizamos su link.
+                # (la pantalla /pago/bdv/checkout ya bloquea reprocesar un pago 'done', es seguro)
+                if transaccion_existente.state == 'done':
+                    return self._bestpay_standard_response(
+                        tx=transaccion_existente,
+                        status='success',
+                        message='Esta orden ya fue pagada.',
+                        transaction_status='done',
+                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
+                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+                    )
+
+                # Caso 2: todavía no vence (< 24h desde su creación) -> reutilizamos el mismo link.
+                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
+                if transaccion_existente.create_date >= limite_expiracion:
+                    return self._bestpay_standard_response(
+                        tx=transaccion_existente,
+                        status='success',
+                        message='Reutilizando la transacción existente.',
+                        transaction_status=transaccion_existente.state,
+                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
+                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+                    )
+
+                # Caso 3: venció y no se pagó -> la cancelamos y dejamos que el flujo normal
+                # de abajo cree una transacción nueva con el mismo external_reference.
+                transaccion_existente.write({
+                    'state': 'cancel',
+                    'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
+                })
+                _logger.info(
+                    "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
+                    transaccion_existente.reference, external_reference
+                )
+                # No hay return aquí a propósito: el código sigue hacia abajo y crea la nueva.
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
         if not provider:
-            return {'status': 'error', 'message': f'El proveedor "{provider_code}" no existe.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'El proveedor "{provider_code}" no existe.',
+                transaction_status='error'
+            )
         
         if provider.id not in partner.allowed_provider_ids.ids:
-            return {'status': 'error', 'message': f'El proveedor "{provider_code}" no está permitido para este cliente.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'El proveedor "{provider_code}" no está permitido para este cliente.',
+                transaction_status='error'
+            )
         
         method_code = kwargs.get('payment_method')
         payment_method = False
@@ -102,22 +218,22 @@ class BestPayApiController(http.Controller):
         if not payment_method:
             payment_method = provider.payment_method_ids[:1]
 
-        # Fallback BestPay: Buscar cualquier método activo si es proveedor BestPay
-        # NOTA: Esto es temporal solo para desarrollo local
-        # if not payment_method and getattr(provider, 'is_bestpay_provider', False):
-        #     payment_method = request.env['payment.method'].sudo().search([('active', '=', True)], limit=1)
-
         # VALIDACIÓN ESTRICTA: Si sigue sin haber método, ¡ERROR REAL! (No más silent fails)
         if not payment_method:
-            return {
-                'status': 'error', 
-                'message': f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.'
-            }
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.',
+                transaction_status='error'
+            )
         
         # 5. Validar Moneda
         currency = request.env['res.currency'].sudo().search([('name', '=', str(currency_code).upper())], limit=1)
         if not currency:
-            return {'status': 'error', 'message': f'La moneda "{currency_code}" no existe.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'La moneda "{currency_code}" no existe.',
+                transaction_status='error'
+            )
         
         # Forzamos la verificación/búsqueda de la tasa actual
         # Creamos un registro dummy o usamos el entorno para invocar el método auxiliar
@@ -127,9 +243,17 @@ class BestPayApiController(http.Controller):
         try:
             monto_recibido = float(amount)
             if monto_recibido <= 0:
-                return {'status': 'error', 'message': 'El monto debe ser un valor mayor a cero.'}
+                return self._bestpay_standard_response(
+                    status='error',
+                    message='El monto debe ser un valor mayor a cero.',
+                    transaction_status='error'
+                )
         except (ValueError, TypeError):
-            return {'status': 'error', 'message': 'El formato del campo "amount" es inválido.'}
+            return self._bestpay_standard_response(
+                status='error',
+                message='El formato del campo "amount" es inválido.',
+                transaction_status='error'
+            )
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
         recalcular = False
@@ -198,7 +322,11 @@ class BestPayApiController(http.Controller):
                 'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
-            return {'status': 'error', 'message': f'Error en Odoo: {str(e)}'}
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'Error en Odoo: {str(e)}',
+                transaction_status='error'
+            )
 
         # 7. Delegar el procesamiento al banco
         try:
@@ -213,11 +341,14 @@ class BestPayApiController(http.Controller):
                 # Respaldo por si _set_error falla debido a alguna restricción interna de Odoo
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
             
-            return {
-                'status': 'error', 
-                'message': error_msg,
-                'transaction_status': 'error'  # Le avisamos al tercero que el registro quedó en error
-            }
+            return self._bestpay_standard_response(
+                tx=tx,
+                status='error',
+                message=error_msg,
+                transaction_status='error',
+                payment_details={'error': error_msg},
+                payment_link=self._bestpay_extract_payment_link(tx=tx),
+            )
         
         if datos_banco and 'error' in datos_banco:
             try:
@@ -225,19 +356,24 @@ class BestPayApiController(http.Controller):
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
             
-            return {
-                'status': 'error', 
-                'message': datos_banco['error'],
-                'transaction_status': 'error'  # Le avisamos al tercero que el registro quedó en error
-            }
+            return self._bestpay_standard_response(
+                tx=tx,
+                status='error',
+                message=datos_banco['error'],
+                transaction_status='error',
+                payment_details=datos_banco,
+                payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
+            )
 
         # 8. Respuesta exitosa
-        return {
-            'status': 'success',
-            'transaction_id': tx.id,
-            'odoo_reference': tx.reference,
-            'external_reference': tx.external_reference,
-            'uuid_hash': tx.uuid_hash,
-            'flow_type': tx.bestpay_flow_type,
-            'payment_details': datos_banco
-        }
+        payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
+        response = self._bestpay_standard_response(
+            tx=tx,
+            status='success',
+            message='Transacción creada correctamente.',
+            transaction_status=tx.state,
+            payment_details=datos_banco,
+            payment_link=payment_link,
+        )
+        tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False, indent=4)})
+        return response

@@ -9,6 +9,12 @@ _logger = logging.getLogger(__name__)
 class ResCurrency(models.Model):
     _inherit = 'res.currency'
 
+    bestpay_eur_bcv_rate = fields.Float(
+        string='Tasa BCV Euro (Directa)',
+        help='Tasa cruda del Euro extraída del BCV (sin cruces de Odoo)',
+        digits=(16, 4),
+    )
+
     @api.model
     def _update_bcv_rate(self):
         _logger.info('[BCV SYNC] ACTUALIZANDO ODOO NATIVO (MONEDA BASE = USD)')
@@ -56,6 +62,7 @@ class ResCurrency(models.Model):
                                 
                                 currency_eur = self.env['res.currency'].search([('name', '=', 'EUR')], limit=1)
                                 if currency_eur:
+                                    currency_eur.write({'bestpay_eur_bcv_rate': tasa_euro})
                                     self.env['res.currency.rate'].search([
                                         ('currency_id', '=', currency_eur.id), ('name', '=', today), ('company_id', '=', self.env.company.id)
                                     ]).unlink()
@@ -65,9 +72,19 @@ class ResCurrency(models.Model):
                                         'name': today,
                                         'rate': tasa_final_eur,
                                         'company_id': self.env.company.id,
+                                        'bestpay_bcv_rate': tasa_euro,  # ← AGREGAR ESTA LÍNEA
                                     })
                                     _logger.info(f'[BCV SYNC] ✓ EUR guardado cruzado: {tasa_final_eur}')
                                     
             self.env.invalidate_all()
         except Exception as e:
             _logger.error(f"[BCV SYNC] Error: {str(e)}")
+
+    class ResCurrencyRate(models.Model):
+        _inherit = 'res.currency.rate'
+
+        bestpay_bcv_rate = fields.Float(
+            string='Tasa BCV',
+            help='Tasa directa del BCV para el histórico',
+            digits=(16, 4),
+        )

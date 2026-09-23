@@ -2,6 +2,7 @@
 import logging
 import secrets
 import json
+import base64
 from odoo import models, fields, api, _
     
 _logger = logging.getLogger(__name__)
@@ -35,6 +36,16 @@ class ResPartner(models.Model):
         copy=False,
     )
 
+    bestpay_basic_token = fields.Char(
+        string="BestPay Basic Token",
+        compute='_compute_bestpay_basic_token',
+        store=True,
+        readonly=True,
+        copy=False,
+        index=True,
+        help="Token Basic (base64 de client_id:client_secret) generado automáticamente para validación API."
+    )
+
     allowed_provider_ids = fields.Many2many(
         'payment.provider',
         'res_partner_payment_provider_rel',
@@ -43,6 +54,15 @@ class ResPartner(models.Model):
         string="Bancos/Pasarelas Permitidas",
         domain="[('is_bestpay_provider', '=', True)]"
     )
+
+    @api.depends('bestpay_client_id', 'bestpay_client_secret')
+    def _compute_bestpay_basic_token(self):
+        for partner in self:
+            if partner.bestpay_client_id and partner.bestpay_client_secret:
+                raw_credentials = f"{partner.bestpay_client_id}:{partner.bestpay_client_secret}"
+                partner.bestpay_basic_token = base64.b64encode(raw_credentials.encode('utf-8')).decode('ascii')
+            else:
+                partner.bestpay_basic_token = False
 
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
