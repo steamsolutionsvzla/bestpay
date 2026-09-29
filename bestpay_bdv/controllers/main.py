@@ -320,10 +320,27 @@ class BestpayBDVController(http.Controller):
             else:
                 _logger.warning(f"[BDV NOTIFICACIÓN] ❌ NO se encontró ningún partner con el teléfono: '{numero_comercio}'")
 
-            # 5. Validar API Key
+            # 5. Validar API Key según el entorno del proveedor (QA vs Producción)
             api_key_valida = False
             if partner:
-                api_key_configurada = partner.bdv_api_key_notification or partner.bdv_api_key_prod
+                # Buscar el provider BDV para saber en qué entorno estamos
+                provider = request.env['payment.provider'].sudo().search([
+                    ('code', '=', 'bdv'),
+                    ('is_bestpay_provider', '=', True),
+                ], limit=1)
+                
+                env_type = provider.bdv_environment if provider else 'qa'
+                _logger.warning(f"[BDV NOTIFICACIÓN] Entorno detectado en Provider: {env_type}")
+
+                if env_type == 'prod':
+                    # En Producción, el BDV usa una sola API Key para todo
+                    api_key_configurada = partner.bdv_api_key_prod or ''
+                    _logger.warning(f"[BDV NOTIFICACIÓN] Usando API Key de Producción (bdv_api_key_prod)")
+                else:
+                    # En QA, usamos la key específica de notificación o el fallback
+                    api_key_configurada = partner.bdv_api_key_notification or '97F6F54EF1A84F3A24FE19A3B338C77A'
+                    _logger.warning(f"[BDV NOTIFICACIÓN] Usando API Key de QA (bdv_api_key_notification)")
+
                 if api_key_configurada:
                     api_key_valida = (api_key_header == api_key_configurada)
                     if api_key_valida:
@@ -331,15 +348,15 @@ class BestpayBDVController(http.Controller):
                     else:
                         _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ API Key NO coincide. Recibida: '{api_key_header}', Configurada: '{api_key_configurada}'")
                 else:
-                    _logger.warning(f"[BDV NOTIFICACIÓN] ❌ El partner no tiene API Key configurada ni en Notificación ni en Producción")
+                    _logger.warning(f"[BDV NOTIFICACIÓN] ❌ El partner no tiene API Key configurada para el entorno {env_type}")
             else:
-                # Respaldo para QA
+                # Respaldo para QA si no se encontró partner
                 api_key_valida = (api_key_header == '97F6F54EF1A84F3A24FE19A3B338C77A')
                 if not api_key_valida:
-                    _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ API Key NO coincide con el fallback de QA")
+                    _logger.warning(f"[BDV NOTIFICACIÓN] ️ API Key NO coincide con el fallback de QA")
 
             if not api_key_valida:
-                _logger.warning(f"[BDV NOTIFICACIÓN] 🚫 Bloqueado por API Key inválida")
+                _logger.warning(f"[BDV NOTIFICACIÓN]  Bloqueado por API Key inválida")
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
                     status=200, content_type='application/json', headers=cors_headers
