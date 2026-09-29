@@ -16,6 +16,23 @@
                         <group string="Permisos de Pasarelas" invisible="not is_api_client">
                             <field name="allowed_provider_ids" widget="many2many_tags" options="{'no_create': True}"/>
                         </group>
+                        
+                        <!-- ========================================== -->
+                        <!-- NUEVO: Bloque de Cifrado                     -->
+                        <!-- ========================================== -->
+                        <group string="Cifrado de Comunicaciones" invisible="not is_api_client">
+                            <field name="bestpay_webhook_active" widget="boolean_toggle" 
+                                   help="Activa o desactiva globalmente el envío de webhooks cifrados a este cliente."/>
+                            <field name="bestpay_encryption_key"  
+                                   help="Clave AES-256 compartida para cifrar/descifrar los webhooks."/>
+                            <button name="action_regenerate_encryption_key" 
+                                    string="🔄 Generar / Regenerar Clave" 
+                                    type="object" 
+                                    class="btn-warning"
+                                    confirm="¿Estás seguro? El cliente deberá actualizar su configuración inmediatamente."/>
+                        </group>
+                        <!-- ========================================== -->
+
                     </group>
                 </page>
             </xpath>

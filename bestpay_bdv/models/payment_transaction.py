@@ -697,35 +697,34 @@ class PaymentTransactionBDV(models.Model):
                 self.id, partner.webhook_url_3ro,
                 self.bestpay_webhook_attempts + 1, self.MAX_WEBHOOK_ATTEMPTS
             )
+            
+            # 1. Llamar al método del core (que ya cifra y envía)
+            result = self._bestpay_send_encrypted_webhook(payload, partner)
+            
+            # 2. Extraer datos directamente del diccionario 
+            status_code = result.get('status_code') or 500
+            response_text = result.get('response', '')
+            success = result.get('success', False)
 
-            response = requests.post(
-                partner.webhook_url_3ro,
-                data=payload_str,
-                headers=headers,
-                timeout=10,
-            )
-
-            # Guardar respuesta en el campo existente de logs
+            # 3. Guardar respuesta en el campo existente de logs
             response_snapshot = json.dumps({
-                'status_code': response.status_code,
-                'headers': dict(response.headers),
-                'body': response.text[:2000],
-                'timestamp': datetime.utcnow().isoformat(),
+                'status_code': status_code,
+                'headers': {},  # El core ya maneja los headers internamente
+                'body': response_text[:2000],
+                'timestamp': fields.Datetime.now().isoformat(),
             }, ensure_ascii=False, indent=2)
 
-            if 200 <= response.status_code < 300:
-                # ✅ ÉXITO
+            # 4. Evaluar resultado y actualizar estado
+            if success:
                 self.write({
                     'bestpay_webhook_state': 'done',
                     'bestpay_webhook_attempts': self.bestpay_webhook_attempts + 1,
                     'bestpay_webhook_sent_at': fields.Datetime.now(),
                     'bestpay_webhook_last_error': False,
                 })
-                _logger.info("[BESTPAY WEBHOOK] ✅ TX %s confirmada por tercero (HTTP %s).",
-                             self.id, response.status_code)
+                _logger.info("[BESTPAY WEBHOOK] ✅ TX %s confirmada por tercero (HTTP %s).", self.id, status_code)
             else:
-                # ⚠️ Respuesta no-2xx → reintento
-                error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
+                error_msg = f"HTTP {status_code}: {response_text[:500]}"
                 self._bestpay_schedule_retry(error_msg)
 
         except requests.exceptions.Timeout:
