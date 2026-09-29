@@ -223,8 +223,6 @@ class BestpayBDVController(http.Controller):
             if env_type == 'qa' and transaction.partner_id.bdv_telefono_destino_qa
             else transaction.partner_id.bdv_telefono_destino
         )
-
-        _logger.info(f"[BDV] Teléfono destino seleccionado ({env_type.upper()}): {telefono_destino}")
         # =====================================================
 
         # Llamar al método de conciliación (el que creamos en el modelo)
@@ -284,14 +282,24 @@ class BestpayBDVController(http.Controller):
             raw_data = request.httprequest.data.decode('utf-8')
             _logger.info(f"[BDV NOTIFICACIÓN] Webhook recibido. Body: {raw_data}")
             
-            # 1. Validar API-KEY del header
-            api_key_header = request.httprequest.headers.get('API-KEY', '').strip()
+            # 1. Validar API-KEY del header (buscar en múltiples formatos)
+            headers = request.httprequest.headers
+            api_key_header = (
+                headers.get('A-Key', '') or 
+                headers.get('API-KEY', '') or 
+                headers.get('Api-Key', '') or 
+                headers.get('api-key', '')
+            ).strip()
+
+            # Log para ver qué headers llegan realmente
+            _logger.info(f"[BDV NOTIFICACIÓN] Headers recibidos: {list(headers.keys())}")
+            _logger.info(f"[BDV NOTIFICACIÓN] API-Key extraída: '{api_key_header}'")
+
             if not api_key_header:
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
-
             # 2. Parsear JSON
             try:
                 payload = json.loads(raw_data)
