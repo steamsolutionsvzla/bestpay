@@ -263,26 +263,18 @@ class BestpayBDVController(http.Controller):
     # =====================================================
     @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def bdv_webhook_notify(self, **post):
-        """
-        Endpoint para recibir notificaciones automáticas del BDV.
-        Incluye headers CORS para permitir peticiones desde herramientas web (Hoppscotch, BDV QA).
-        """
-        # Headers CORS obligatorios para que los navegadores no bloqueen la respuesta
         cors_headers = {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'API-Key, Content-Type, Accept',
+            'Access-Control-Allow-Headers': 'API-Key, A-Key, Content-Type, Accept',
         }
-
-        # Si el navegador envía una petición OPTIONS (preflight), respondemos 200 inmediatamente
         if request.httprequest.method == 'OPTIONS':
             return Response('', status=200, headers=cors_headers)
-
         try:
             raw_data = request.httprequest.data.decode('utf-8')
-            _logger.info(f"[BDV NOTIFICACIÓN] Webhook recibido. Body: {raw_data}")
+            _logger.warning(f"[BDV NOTIFICACIÓN] Webhook recibido. Body: {raw_data}")
             
-            # 1. Validar API-KEY del header (buscar en múltiples formatos)
+            # 1. Validar API-KEY del header
             headers = request.httprequest.headers
             api_key_header = (
                 headers.get('A-Key', '') or 
@@ -290,20 +282,21 @@ class BestpayBDVController(http.Controller):
                 headers.get('Api-Key', '') or 
                 headers.get('api-key', '')
             ).strip()
-
-            # Log para ver qué headers llegan realmente
-            _logger.info(f"[BDV NOTIFICACIÓN] Headers recibidos: {list(headers.keys())}")
-            _logger.info(f"[BDV NOTIFICACIÓN] API-Key extraída: '{api_key_header}'")
+            _logger.warning(f"[BDV NOTIFICACIÓN] Headers recibidos: {list(headers.keys())}")
+            _logger.warning(f"[BDV NOTIFICACIÓN] API-Key extraída: '{api_key_header}'")
 
             if not api_key_header:
+                _logger.warning(f"[BDV NOTIFICACIÓN] ❌ No se encontró API-Key en headers")
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
+
             # 2. Parsear JSON
             try:
                 payload = json.loads(raw_data)
             except json.JSONDecodeError:
+                _logger.warning(f"[BDV NOTIFICACIÓN]  JSON inválido")
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "JSON inválido", "mensajeSistema": "Error al parsear"}),
                     status=200, content_type='application/json', headers=cors_headers
@@ -311,31 +304,53 @@ class BestpayBDVController(http.Controller):
 
             # 3. Identificar el comercio receptor
             numero_comercio = payload.get('numeroComercio', '')
-            
-            # 4. Validar API Key contra el Partner (Comercio)
+            _logger.warning(f"[BDV NOTIFICACIÓN] numeroComercio recibido: '{numero_comercio}'")
+
+            # 4. Buscar el Partner
             partner = request.env['res.partner'].sudo().search([
                 '|',
                 ('bdv_telefono_destino', '=', numero_comercio),
                 ('bdv_telefono_notificacion', '=', numero_comercio)
             ], limit=1)
             
+            if partner:
+                _logger.warning(f"[BDV NOTIFICACIÓN] ✅ Partner encontrado: {partner.name} (ID: {partner.id})")
+                _logger.warning(f"[BDV NOTIFICACIÓN] bdv_api_key_notification: '{partner.bdv_api_key_notification}'")
+                _logger.warning(f"[BDV NOTIFICACIÓN] bdv_api_key_prod: '{partner.bdv_api_key_prod}'")
+            else:
+                _logger.warning(f"[BDV NOTIFICACIÓN] ❌ NO se encontró ningún partner con el teléfono: '{numero_comercio}'")
+
+            # 5. Validar API Key
             api_key_valida = False
-            if partner and partner.bdv_api_key_notification:
-                api_key_valida = (api_key_header == partner.bdv_api_key_notification)
+            if partner:
+                api_key_configurada = partner.bdv_api_key_notification or partner.bdv_api_key_prod
+                if api_key_configurada:
+                    api_key_valida = (api_key_header == api_key_configurada)
+                    if api_key_valida:
+                        _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente")
+                    else:
+                        _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ API Key NO coincide. Recibida: '{api_key_header}', Configurada: '{api_key_configurada}'")
+                else:
+                    _logger.warning(f"[BDV NOTIFICACIÓN] ❌ El partner no tiene API Key configurada ni en Notificación ni en Producción")
             else:
                 # Respaldo para QA
                 api_key_valida = (api_key_header == '97F6F54EF1A84F3A24FE19A3B338C77A')
+                if not api_key_valida:
+                    _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ API Key NO coincide con el fallback de QA")
 
             if not api_key_valida:
+                _logger.warning(f"[BDV NOTIFICACIÓN] 🚫 Bloqueado por API Key inválida")
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
 
-            # 5. Delegar la lógica de negocio al modelo (Búsqueda por Teléfono)
+            _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente. Pasando al modelo...")
+
+            # 6. Delegar la lógica de negocio al modelo
             resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
 
-            # 6. Responder al BDV
+            # 7. Responder al BDV
             if resultado['codigo'] == '01':
                 return Response(
                     json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
@@ -346,7 +361,6 @@ class BestpayBDVController(http.Controller):
                     json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
-
         except Exception as e:
             _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
             return Response(
