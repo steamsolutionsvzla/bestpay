@@ -667,27 +667,23 @@ class PaymentTransactionBDV(models.Model):
         """Envía el webhook al tercero (un intento). Actualiza el estado."""
         self.ensure_one()
         partner = self.bestpay_client_id or self.partner_id
-        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_secret:
+        if not partner or not partner.webhook_url_3ro:
             _logger.warning(
-                "[BESTPAY WEBHOOK] TX %s sin URL o secreto. Se marca como fallido permanente.",
+                "[BESTPAY WEBHOOK] TX %s sin URL de webhook configurada. Se marca como fallido permanente.",
                 self.id
             )
             self.write({
                 'bestpay_webhook_state': 'failed',
-                'bestpay_webhook_last_error': 'URL o secreto no configurados en el partner.',
+                'bestpay_webhook_last_error': 'URL de webhook no configurada en el partner.',
                 'bestpay_webhook_attempts': self.MAX_WEBHOOK_ATTEMPTS,  # No reintenta más
             })
             return
 
         try:
             payload = self._bestpay_build_webhook_payload_3ro()
-            # Serialización estable: sort_keys para garantizar misma firma siempre
-            payload_str = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
-            signature = self._bestpay_compute_webhook_signature_3ro(payload_str, partner.bestpay_webhook_secret)
 
             headers = {
                 'Content-Type': 'application/json; charset=utf-8',
-                'X-BestPay-Signature': f'sha256={signature}',
                 'X-BestPay-Event-ID': self.bestpay_webhook_event_id or '',
                 'User-Agent': 'BestPay-Webhook/1.0',
             }
