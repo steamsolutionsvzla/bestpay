@@ -349,6 +349,12 @@ class PaymentTransaction(models.Model):
             status_code = response.status_code
             response_body = f"HTTP {response.status_code}\n\n{response.text}"
             success = response.status_code in (200, 201, 204)
+
+            result = self._bestpay_send_encrypted_webhook(payload, partner)
+            status_code = response.status_code
+            response_body = f"HTTP {response.status_code}\n\n{response.text}"
+            success = response.status_code in (200, 201, 204)
+        
         except requests.exceptions.RequestException as e:
             _logger.error(f"[WEBHOOK TERCERO] Error de conexión al notificar Tx {self.reference}: {str(e)}")
             response_body = f"ERROR DE CONEXIÓN (sin respuesta del tercero):\n\n{str(e)}"

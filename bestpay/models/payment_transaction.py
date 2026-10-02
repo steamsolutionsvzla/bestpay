@@ -55,6 +55,50 @@ class ResPartner(models.Model):
         domain="[('is_bestpay_provider', '=', True)]"
     )
 
+    # =========================================================================
+    # 🔔 CONFIGURACIÓN DE WEBHOOK Y CIFRADO (Core BestPay)
+    # =========================================================================
+    webhook_url_3ro = fields.Char(
+        string="URL Webhook del Tercero",
+        help="URL donde BestPay enviará las notificaciones de pago (ej: Koole)."
+    )
+    bestpay_webhook_active = fields.Boolean(
+        string="Webhook Activo",
+        default=True,
+        help="Activa o desactiva el envío de webhooks a este cliente."
+    )
+    bestpay_encryption_key = fields.Char(
+        string="Clave de Cifrado BestPay (AES-256)",
+        help="Clave en base64 para cifrar/descifrar el body. Se genera automáticamente.",
+        copy=False,
+    )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """Genera automáticamente una clave de cifrado para nuevos clientes API."""
+        from ..lib.crypto_utils import generate_key
+        for vals in vals_list:
+            if not vals.get('bestpay_encryption_key') and vals.get('is_api_client'):
+                vals['bestpay_encryption_key'] = generate_key()
+        return super().create(vals_list)
+
+    def action_regenerate_encryption_key(self):
+        """Botón para regenerar la clave de cifrado manualmente (Rotación)."""
+        self.ensure_one()
+        from ..lib.crypto_utils import generate_key
+        new_key = generate_key()
+        self.write({'bestpay_encryption_key': new_key})
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Clave Regenerada',
+                'message': 'Nueva clave generada. Debes comunicarla al cliente por un canal seguro.',
+                'type': 'warning',
+                'sticky': False,
+            }
+        }
+
     @api.depends('bestpay_client_id', 'bestpay_client_secret')
     def _compute_bestpay_basic_token(self):
         for partner in self:
@@ -276,3 +320,88 @@ class PaymentTransaction(models.Model):
         return {
             "error": _("El proveedor de pago %s no está soportado en este momento.") % self.provider_id.code
         }
+    # =========================================================================
+    # 🔔 UTILIDAD DE ENVÍO DE WEBHOOKS CIFRADOS (Core BestPay)
+    # =========================================================================
+    def _bestpay_send_encrypted_webhook(self, payload_dict, partner=None):
+        """
+        Método utilitario para enviar un webhook cifrado con AES-256-GCM.
+        
+        Args:
+            payload_dict (dict): Los datos a enviar al tercero.
+            partner (res.partner, opcional): El partner destino. Si no se pasa, 
+                     se usa self.bestpay_client_id o self.partner_id.
+        
+        Returns:
+            dict: {'success': bool, 'status_code': int, 'response': str}
+        """
+        self.ensure_one()
+        import requests
+        
+        target_partner = partner or self.bestpay_client_id or self.partner_id
+        
+        if not target_partner or not getattr(target_partner, 'webhook_url_3ro', False):
+            _logger.warning("[BESTPAY WEBHOOK] TX %s: Sin URL de webhook configurada.", self.id)
+            return {'success': False, 'status_code': None, 'response': 'Sin URL configurada'}
+
+        encryption_key = getattr(target_partner, 'bestpay_encryption_key', False)
+        event_id = getattr(self, 'bestpay_webhook_event_id', False) or f"evt_{secrets.token_urlsafe(24)}"
+
+        # ==========================================
+        # CIFRADO DEL BODY (AES-256-GCM)
+        # ==========================================
+        if encryption_key:
+            from ..lib.crypto_utils import encrypt_payload
+            try:
+                encrypted_data = encrypt_payload(payload_dict, encryption_key, key_id="v1")
+                body_to_send = json.dumps(encrypted_data, ensure_ascii=False)
+                headers = {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'X-BestPay-Encrypted': 'true',
+                    'X-BestPay-Event-ID': event_id,
+                    'User-Agent': 'BestPay-Webhook/1.0',
+                }
+                _logger.info("[BESTPAY WEBHOOK] TX %s: Body CIFRADO con AES-256-GCM.", self.id)
+            except Exception as e:
+                _logger.error("[BESTPAY WEBHOOK] TX %s: Fallo al cifrar: %s", self.id, str(e))
+                return {'success': False, 'status_code': None, 'response': f'Error de cifrado: {str(e)}'}
+        else:
+            # Fallback: texto plano (para transición o debugging)
+            body_to_send = json.dumps(payload_dict, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            headers = {
+                'Content-Type': 'application/json; charset=utf-8',
+                'X-BestPay-Event-ID': event_id,
+                'User-Agent': 'BestPay-Webhook/1.0',
+            }
+            _logger.warning("[BESTPAY WEBHOOK] TX %s: Enviando SIN CIFRAR (partner sin clave).", self.id)
+
+        # ==========================================
+        # ENVÍO DE LA PETICIÓN
+        # ==========================================
+        try:
+            _logger.info("[BESTPAY WEBHOOK] TX %s → %s", self.id, target_partner.webhook_url_3ro)
+            response = requests.post(
+                target_partner.webhook_url_3ro,
+                data=body_to_send,
+                headers=headers,
+                timeout=10,
+            )
+            
+            success = 200 <= response.status_code < 300
+            _logger.info("[BESTPAY WEBHOOK] TX %s: Respuesta HTTP %s (Éxito: %s)", self.id, response.status_code, success)
+            
+            return {
+                'success': success,
+                'status_code': response.status_code,
+                'response': response.text[:1000]
+            }
+
+        except requests.exceptions.Timeout:
+            _logger.error("[BESTPAY WEBHOOK] TX %s: Timeout.", self.id)
+            return {'success': False, 'status_code': None, 'response': 'Timeout (10s)'}
+        except requests.exceptions.ConnectionError as e:
+            _logger.error("[BESTPAY WEBHOOK] TX %s: Error de conexión: %s", self.id, str(e))
+            return {'success': False, 'status_code': None, 'response': f'Error de conexión: {str(e)}'}
+        except Exception as e:
+            _logger.exception("[BESTPAY WEBHOOK] TX %s: Error inesperado.", self.id)
+            return {'success': False, 'status_code': None, 'response': f'Error inesperado: {str(e)}'}
