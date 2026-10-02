@@ -51,6 +51,12 @@ class PaymentTransactionBDV(models.Model):
         help="Monto en Bolívares que el pagador dice haber transferido.",
         digits=(12, 2),
     )
+
+    bdv_id_comercio = fields.Char(string="RIF Comercio (BDV)")
+    bdv_numero_comercio = fields.Char(string="Teléfono Comercio (BDV)")
+    bdv_hora_pago = fields.Char(string="Hora del Pago BDV")
+    bdv_raw_payload = fields.Text(string="Payload Original BDV (JSON)")
+
     bdv_req_ced = fields.Boolean(
         string="Requiere Cédula BDV",
         default=False,
@@ -835,7 +841,11 @@ class PaymentTransactionBDV(models.Model):
                 'state': 'done',
                 'bdv_conciliation_state': 'approved',
                 'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
-            }
+                'bdv_id_comercio': payload.get('idComercio', ''),
+                'bdv_numero_comercio': payload.get('numeroComercio', ''),
+                'bdv_hora_pago': payload.get('hora', ''),
+                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False), # Solo se llena aquí
+        }
             if not tx.bdv_banco_origen and banco_origen:
                 vals_to_write['bdv_banco_origen'] = banco_origen
             if not tx.bdv_cedula_pagador and cedula_pagador and not cedula_pagador.startswith('V'):
@@ -879,6 +889,10 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_banco_origen': banco_origen,
                 'bdv_cedula_pagador': cedula_pagador if cedula_pagador else '',
                 'client_note': f"Pago notificado por BDV. Referencia: {referencia}",
+                'bdv_id_comercio': payload.get('idComercio', ''),
+                'bdv_numero_comercio': payload.get('numeroComercio', ''),
+                'bdv_hora_pago': payload.get('hora', ''),
+                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False), # Solo se llena aquí
             })
             _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX creada: ID {new_tx.id}, Referencia: {referencia}")
             

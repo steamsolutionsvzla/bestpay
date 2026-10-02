@@ -17,6 +17,7 @@
         'views/templates.xml',
         'views/c2p_checkout_form.xml',
         'views/movimiento_wizard_views.xml',
+        'views/payment_transaction_views.xml',
     ],
         'assets': {
         'web.assets_frontend': [
