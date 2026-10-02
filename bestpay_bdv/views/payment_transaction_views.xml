@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_payment_transaction_form_inherit_bdv" model="ir.ui.view">
+        <field name="name">payment.transaction.form.inherit.bdv</field>
+        <field name="model">payment.transaction</field>
+        <!-- AQUÍ ESTÁ LA CLAVE: Usamos la vista base de BestPay, igual que Wilson -->
+        <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
+        <field name="arch" type="xml">
+            <!-- Inyectamos nuestro grupo al final de la hoja (sheet) del formulario -->
+            <xpath expr="//sheet" position="inside">
+                <group string="📡 Datos Webhook BDV (Solo Notificación)" invisible="not bdv_raw_payload">
+                    <group>
+                        <field name="bdv_id_comercio"/>
+                        <field name="bdv_numero_comercio"/>
+                        <field name="bdv_fecha_pago"/>
+                        <field name="bdv_hora_pago"/>
+                        <field name="bdv_banco_origen"/>
+                        <field name="bdv_cedula_pagador"/>
+                        <field name="bdv_telefono_pagador"/>
+                        <field name="bdv_importe"/>
+                        <field name="bdv_referencia"/>
+                    </group>
+                    <group>
+                        <!-- El payload crudo ocupa su propia columna para no romper el diseño -->
+                        <field name="bdv_raw_payload" widget="text" readonly="1"/>
+                    </group>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
