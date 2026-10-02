@@ -377,31 +377,62 @@ class PaymentTransactionBDV(models.Model):
     # MÉTODOS API C2P CUENTAS MÚLTIPLES (BDV)
     # =========================================================================
 
-    def _bdv_get_base_url(self):
-        """Obtiene la URL base del proveedor, eliminando el endpoint específico de Pago Móvil."""
+    def _bdv_get_c2p_base_url(self):
+        """Obtiene la URL base específica para C2P según el entorno (QA o Prod)."""
         self.ensure_one()
-        url = self.provider_id.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444'
-        # Limpia la URL para dejar solo el host y puerto base
-        return url.replace('/getMovement/v2', '').replace('/getMovement', '').rstrip('/')
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
+        
+        if env_type == 'prod':
+            # PRODUCCIÓN: URL oficial fija según el PDF de Producción (pág. 2, 4, 6)
+            return "https://bdvconciliacion.banvenez.com:443/BankMobilePaymentC2P/MultipleAccounts"
+        else:
+            # QA: Deriva la URL base desde la URL de Pago Móvil QA que ya tienes configurada
+            base_qa = self.provider_id.bdv_api_url or 'https://bdvconciliacionqa.banvenez.com:444'
+            base_clean = base_qa.replace('/getMovement/v2', '').replace('/getMovement', '').rstrip('/')
+            return f"{base_clean}/BankMobilePaymentC2P/MultipleAccounts"
 
     def _bdv_get_c2p_headers(self):
-        """Construye los headers necesarios para las peticiones C2P."""
+        """Construye los headers C2P usando la API Key correcta según el entorno."""
         self.ensure_one()
-        # Lee la API Key específica de C2P del partner (comercio)
-        api_key = getattr(self.partner_id, 'bdv_api_key_c2p', '')
-        if not api_key:
-            _logger.error(f"BDV C2P: Falta bdv_api_key_c2p en el partner {self.partner_id.name}")
-            raise UserError("Error de configuración: Falta la API Key de C2P en los datos del comercio.")
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
         
+        if env_type == 'prod':
+            # PRODUCCIÓN: Usa la API Key maestra de producción (la misma de Pago Móvil)
+            api_key = getattr(self.partner_id, 'bdv_api_key_prod', '')
+        else:
+            # QA: Usa la key específica de C2P, o la general de QA como respaldo
+            api_key = getattr(self.partner_id, 'bdv_api_key_c2p', '') or getattr(self.partner_id, 'bdv_api_key', '')
+            
+        if not api_key:
+            _logger.error(f"BDV C2P: Falta API Key para entorno {env_type} en partner {self.partner_id.name}")
+            raise UserError(f"Error de configuración: Falta la API Key para el entorno {env_type.upper()} en los datos del comercio.")
+            
         return {
             "X-API-Key": api_key,
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
 
+    def _bdv_get_c2p_commerce_phone(self):
+        """Obtiene el teléfono del comercio (commerceNumberInstrument) según el entorno."""
+        self.ensure_one()
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
+        
+        if env_type == 'prod':
+            # PRODUCCIÓN: Usa el teléfono destino principal del comercio (mismo que Pago Móvil)
+            phone = getattr(self.partner_id, 'bdv_telefono_destino', '')
+        else:
+            # QA: Usa el teléfono específico de C2P o el de destino QA como respaldo
+            phone = getattr(self.partner_id, 'bdv_phone_destino_c2p', '') or \
+                    getattr(self.partner_id, 'bdv_telefono_destino_qa', '') or \
+                    getattr(self.partner_id, 'bdv_telefono_destino', '')
+                    
+        if not phone:
+            raise UserError(f"Error de configuración: Falta el Teléfono Destino del comercio para el entorno {env_type.upper()}.")
+        return phone
+
     def _bdv_c2p_log_stage(self, stage, request_payload=None, response_payload=None):
-        """Agrega (append) un bloque de log por etapa C2P con encabezado.
-        Salida (peticion) -> bank_out_log | Entrada (respuesta) -> bank_in_log."""
+        """Agrega (append) un bloque de log por etapa C2P con encabezado."""
         def dump(data):
             try:
                 return json.dumps(data, indent=2, ensure_ascii=False, default=str)
@@ -409,33 +440,30 @@ class PaymentTransactionBDV(models.Model):
                 return str(data)
         vals = {}
         if request_payload is not None:
-            vals['bank_out_log'] = (self.bank_out_log or '') + \
-                f"=== SALIDA · {stage} ===\n{dump(request_payload)}\n\n"
+            vals['bank_out_log'] = (self.bank_out_log or '') + f"=== SALIDA · {stage} ===\n{dump(request_payload)}\n\n"
         if response_payload is not None:
-            vals['bank_in_log'] = (self.bank_in_log or '') + \
-                f"=== ENTRADA · {stage} ===\n{dump(response_payload)}\n\n"
+            vals['bank_in_log'] = (self.bank_in_log or '') + f"=== ENTRADA · {stage} ===\n{dump(response_payload)}\n\n"
         if vals:
             self.write(vals)
 
     def bdv_c2p_generate_otp(self):
         """Paso 1: Solicita al BDV el envío del OTP al cliente."""
         self.ensure_one()
-        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/paymentkey/v2"
-        payload = {
-            "customerDocumentId": self.bdv_c2p_customer_document_id
-        }
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
         
-        _logger.info(f"BDV C2P OTP Request: {url} | Payload: {payload}")
+        base_url = self._bdv_get_c2p_base_url()
+        # QA mantiene /v2 (según tu doc actual), Producción va sin /v2 (según PDF Prod)
+        action = "paymentkey/v2" if env_type == 'qa' else "paymentkey"
+        url = f"{base_url}/{action}"
         
-        # Guardar el request en bank_out_log (salida al banco)
+        payload = {"customerDocumentId": self.bdv_c2p_customer_document_id}
+        _logger.info(f"BDV C2P OTP Request ({env_type.upper()}): {url} | Payload: {payload}")
+        
         self._bdv_c2p_log_stage("GENERATE OTP", request_payload=payload)
-        
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
             data = response.json()
             _logger.info(f"BDV C2P OTP Response: {data}")
-            
-            # Guardar la respuesta en bank_in_log (entrada del banco)
             self._bdv_c2p_log_stage("GENERATE OTP", response_payload=data)
             
             if data.get('code') == '1000':
@@ -451,19 +479,20 @@ class PaymentTransactionBDV(models.Model):
     def bdv_c2p_process_payment(self):
         """Paso 2: Procesa el cobro real utilizando el OTP proporcionado."""
         self.ensure_one()
-        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/process/v2"
-        
-        phone_destino = getattr(self.partner_id, 'bdv_phone_destino_c2p', '')
-        if not phone_destino:
-            raise UserError("Falta configurar el 'bdv_phone_destino_c2p' en el contacto del comercio.")
-
-        # LÓGICA DE QA vs PRODUCCIÓN (Monto y Concepto)
         env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
         
+        base_url = self._bdv_get_c2p_base_url()
+        action = "process/v2" if env_type == 'qa' else "process"
+        url = f"{base_url}/{action}"
+        
+        # Obtiene el teléfono correcto según el entorno (Prod = principal)
+        phone_destino = self._bdv_get_c2p_commerce_phone()
+        
+        # Lógica de Monto (QA fijo, Prod real)
         if env_type == 'qa':
             amount_str = "1000.6"
             concept_str = "Pago"
-            _logger.info(f"[BDV C2P] 🟢 Ambiente QA detectado. Forzando monto: {amount_str} Bs y concepto: '{concept_str}'")
+            _logger.info(f"[BDV C2P] 🟢 Ambiente QA detectado. Forzando monto: {amount_str} Bs")
         else:
             amount_float = getattr(self, 'amount_ves', 0.0)
             if not amount_float or float(amount_float) <= 0:
@@ -471,7 +500,7 @@ class PaymentTransactionBDV(models.Model):
             amount_str = f"{amount_float:.2f}"
             concept_str = self.bdv_c2p_concept or f"Pago BestPay Ref: {self.reference}"
             _logger.info(f"[BDV C2P] 🔵 Ambiente PRODUCCIÓN. Monto: {amount_str} Bs")
-
+            
         payload = {
             "customerDocumentId": self.bdv_c2p_customer_document_id,
             "customerNumberInstrument": self.bdv_c2p_customer_phone,
@@ -484,19 +513,15 @@ class PaymentTransactionBDV(models.Model):
             "commerceNumberInstrument": phone_destino
         }
         
-        _logger.info(f"BDV C2P Process Request: {url} | Payload: {payload}")
-        
-        # Guardar el request
+        _logger.info(f"BDV C2P Process Request ({env_type.upper()}): {url} | Payload: {payload}")
         self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=20)
             data = response.json()
             _logger.info(f"BDV C2P Process Response: {data}")
-            
-            # Guardar la respuesta
             self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP)", response_payload=data)
-
+            
             if data.get('code') == '1000' and data.get('data'):
                 response_data = data['data']
                 self.write({
@@ -506,11 +531,9 @@ class PaymentTransactionBDV(models.Model):
                     'state': 'done',
                     'state_message': 'Pago C2P aprobado por el BDV'
                 })
-
-                # 🔔 Disparar webhook al tercero (asíncrono, lo procesa el cron)
                 self._bestpay_trigger_webhook_3ro()
                 return {'success': True, 'data': response_data}
-            
+                
             self.write({
                 'bdv_c2p_status': 'error',
                 'state': 'error',
@@ -528,25 +551,27 @@ class PaymentTransactionBDV(models.Model):
             _logger.warning("BDV C2P Annul: No hay endToEndId para anular.")
             return False
             
-        url = f"{self._bdv_get_base_url()}/BankMobilePaymentC2P/MultipleAccounts/annulment/v2"
+        env_type = self.provider_id.bdv_environment.strip().lower() if self.provider_id.bdv_environment else 'qa'
+        
+        base_url = self._bdv_get_c2p_base_url()
+        action = "annulment/v2" if env_type == 'qa' else "annulment"
+        url = f"{base_url}/{action}"
+        
         payload = {
             "endToEndId": self.bdv_c2p_end_to_end_id,
-            "referenceOrigin": None
+            # PRODUCCIÓN: El PDF exige string vacío "". QA mantiene tu original (None) por compatibilidad.
+            "referenceOrigin": "" if env_type == 'prod' else None
         }
         
-        _logger.info(f"BDV C2P Annul Request: {url} | Payload: {payload}")
-        
-        # Guardar el request
+        _logger.info(f"BDV C2P Annul Request ({env_type.upper()}): {url} | Payload: {payload}")
         self._bdv_c2p_log_stage("ANULACION", request_payload=payload)
         
         try:
             response = requests.post(url, json=payload, headers=self._bdv_get_c2p_headers(), timeout=15)
             data = response.json()
             _logger.info(f"BDV C2P Annul Response: {data}")
-            
-            # Guardar la respuesta
             self._bdv_c2p_log_stage("ANULACION", response_payload=data)
-
+            
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'annulled', 'state': 'cancel'})
                 return True
@@ -554,7 +579,6 @@ class PaymentTransactionBDV(models.Model):
         except Exception as e:
             self._bdv_c2p_log_stage("ANULACION · ERROR", response_payload={'error': str(e)})
             raise
-    
         # =================================================================
     # 🔔 MÉTODOS DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
     # =================================================================

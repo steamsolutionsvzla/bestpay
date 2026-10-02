@@ -124,6 +124,12 @@ class PaymentProviderBDV(models.Model):
             
             # ✅ URL CORRECTA de producción según documentación oficial
             url = 'https://bdvconciliacion.banvenez.com/apis/bdv/consulta/movimientos'
+
+            bdv_c2p_api_url_prod = fields.Char(
+                string="URL Base C2P (Producción)",
+                help="URL base para C2P en producción. El sistema agregará /paymentkey, /process o /annulment automáticamente.",
+                default="https://bdvconciliacion.banvenez.com:443/BankMobilePaymentC2P/MultipleAccounts"
+        )
             
             payload = {
                 "cuenta": cuenta,
