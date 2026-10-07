@@ -364,6 +364,22 @@ class BestpayBDVController(http.Controller):
 
             _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente. Pasando al modelo...")
 
+            # ==========================================
+            # 📝 GUARDAR REGISTRO EN NOTIFICACIONES BANCARIAS
+            # ==========================================
+            try:
+                request.env['bestpay.bank.notification'].sudo().create({
+                    'provider_code': 'bdv',
+                    'partner_id': partner.id if partner else False,
+                    'external_ref': payload.get('referenciaBancoOrdenante', ''),
+                    'amount': float(payload.get('monto', 0) or 0),
+                    'status': 'received',
+                    'raw_payload': json.dumps(payload, ensure_ascii=False, indent=2),
+                })
+            except Exception as e:
+                _logger.warning(f"[BDV] No se pudo guardar en Notificaciones Bancarias: {e}")
+            # ==========================================
+
             # 6. Delegar la lógica de negocio al modelo
             resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
 

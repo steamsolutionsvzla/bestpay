@@ -20,6 +20,20 @@
             </field>
         </record>
 
+        <record id="action_bestpay_notifications" model="ir.actions.act_window">
+            <field name="name">Notificaciones Bancarias</field>
+            <field name="res_model">bestpay.bank.notification</field>
+            <field name="view_mode">list,form,kanban</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    No hay notificaciones bancarias registradas aún.
+                </p>
+                <p>
+                    Aquí se almacenan todos los webhooks crudos recibidos de los bancos (BDV, Mercantil, etc.) para auditoría y debugging.
+                </p>
+            </field>
+        </record>
+
         <record id="action_bestpay_providers" model="ir.actions.act_window">
             <field name="name">Bancos y Pasarelas</field>
             <field name="res_model">payment.provider</field>
@@ -70,6 +84,12 @@
                 parent="menu_bestpay_operations"
                 action="action_bestpay_transactions"
                 sequence="10"/>
+
+        <menuitem id="menu_bestpay_notifications"
+                name="Notificaciones"
+                parent="menu_bestpay_root"
+                action="action_bestpay_notifications"
+                sequence="15"/> 
 
         <menuitem id="menu_bestpay_configuration"
                 name="Configuración"
