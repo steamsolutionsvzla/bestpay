@@ -19,6 +19,21 @@
                 </p>
             </field>
         </record>
+                <!-- VISTA DE LISTA PARA NOTIFICACIONES -->
+        <record id="view_bestpay_bank_notification_list" model="ir.ui.view">
+            <field name="name">bestpay.bank.notification.list</field>
+            <field name="model">bestpay.bank.notification</field>
+            <field name="arch" type="xml">
+                <list string="Notificaciones Bancarias" decoration-success="status == 'matched'" decoration-warning="status == 'received'" decoration-danger="status == 'error'">
+                    <field name="external_ref" string="Referencia"/>
+                    <field name="received_at" string="Creado el"/>
+                    <field name="provider_code" string="Método de pago"/>
+                    <field name="partner_id" string="Cliente"/>
+                    <field name="amount" string="Importe"/>
+                    <field name="status" string="Estado"/>
+                </list>
+            </field>
+        </record>
 
         <record id="action_bestpay_notifications" model="ir.actions.act_window">
             <field name="name">Notificaciones Bancarias</field>
