@@ -61,6 +61,11 @@ class BestPayApiController(http.Controller):
                 'payment_link': resolved_payment_link,
                 'flow_type': tx.bestpay_flow_type,
                 'payment_details': payload,
+                # Campos monetarios (misma lógica que el webhook de Mercantil)
+                'amount': tx.amount,
+                'currency': tx.currency_id.name,
+                'amount_ves': tx.amount_ves,
+                'exchange_rate': tx.exchange_rate_bcv,
             }
         else:
             response = {
