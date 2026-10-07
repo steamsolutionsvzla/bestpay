@@ -24,7 +24,7 @@
             <field name="name">bestpay.bank.notification.list</field>
             <field name="model">bestpay.bank.notification</field>
             <field name="arch" type="xml">
-                <list string="Notificaciones Bancarias" decoration-success="status == 'matched'" decoration-warning="status == 'received'" decoration-danger="status == 'error'">
+                <list string="Notificaciones Bancarias">
                     <field name="external_ref" string="Referencia"/>
                     <field name="received_at" string="Creado el"/>
                     <field name="provider_code" string="Método de pago"/>
