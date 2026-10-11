@@ -5,24 +5,26 @@
         <field name="model">payment.transaction</field>
         <!-- AQUÍ ESTÁ LA CLAVE: Usamos la vista base de BestPay, igual que Wilson -->
         <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
-        <field name="arch" type="xml">
-            <!-- Inyectamos nuestro grupo al final de la hoja (sheet) del formulario -->
+<field name="arch" type="xml">
             <xpath expr="//sheet" position="inside">
-                <group string="📡 Datos Webhook BDV (Solo Notificación)" invisible="not bdv_raw_payload">
+                <group string="🏦 Notificación Bancaria BDV" invisible="provider_code != 'bdv'">
                     <group>
-                        <field name="bdv_id_comercio"/>
-                        <field name="bdv_numero_comercio"/>
-                        <field name="bdv_fecha_pago"/>
-                        <field name="bdv_hora_pago"/>
-                        <field name="bdv_banco_origen"/>
-                        <field name="bdv_cedula_pagador"/>
-                        <field name="bdv_telefono_pagador"/>
-                        <field name="bdv_importe"/>
-                        <field name="bdv_referencia"/>
+                        <field name="bank_notification_id" options="{'no_create': True}"/>
+                        <field name="bdv_conciliation_state" widget="badge" 
+                               decoration-success="bdv_conciliation_state == 'approved'"
+                               decoration-danger="bdv_conciliation_state == 'rejected'"
+                               decoration-warning="bdv_conciliation_state in ('sent', 'draft')"
+                               decoration-muted="bdv_conciliation_state == 'error'"/>
+                        <field name="bdv_conciliation_message" readonly="1" invisible="not bdv_conciliation_message"/>
+                        <field name="bdv_referencia" readonly="1"/>
+                        <field name="bdv_importe" readonly="1"/>
                     </group>
                     <group>
-                        <!-- El payload crudo ocupa su propia columna para no romper el diseño -->
-                        <field name="bdv_raw_payload" widget="text" readonly="1"/>
+                        <field name="bdv_telefono_pagador" readonly="1"/>
+                        <field name="bdv_cedula_pagador" readonly="1"/>
+                        <field name="bdv_banco_origen" readonly="1"/>
+                        <field name="bdv_fecha_pago" readonly="1"/>
+                        <field name="bdv_hora_pago" readonly="1"/>
                     </group>
                 </group>
             </xpath>

@@ -16,11 +16,13 @@ class BestpayBankNotification(models.Model):
     # 3. Datos extraídos para vista rápida (sin tener que abrir el JSON)
     external_ref = fields.Char(string="Referencia Externa", help="Referencia que manda el banco")
     amount = fields.Float(string="Monto Notificado", digits=(12, 2))
+    payer_phone = fields.Char(string="Teléfono Pagador", index=True, help="Teléfono extraído del webhook para casado automático")
     
-    # 4. Estado del procesamiento
+# 4. Estado del procesamiento
     status = fields.Selection([
         ('received', 'Recibido (Pendiente)'),
         ('matched', 'Casado Exitosamente'),
+        ('matched_late', 'Casado (Llegó Tarde)'),
         ('error', 'Error / No se pudo casar'),
     ], string="Estado", default='received', index=True)
     

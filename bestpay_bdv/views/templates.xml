@@ -278,14 +278,15 @@
                                                                 </div>
                                                             </t>
 
-                                                            <!-- Botón Continuar -->
+                                                            <!-- Botón Principal: Ya pagué -->
                                                             <div class="d-grid gap-2 mt-3">
                                                                 <button type="button" 
+                                                                        id="btnYaPague"
                                                                         class="btn btn-lg" 
                                                                         style="background:linear-gradient(135deg, #0033a0 0%, #002270 100%); 
                                                                                color:white; font-weight:700; border-radius:10px; padding:15px; border:none;"
-                                                                        onclick="bpCloseComercioModal()">
-                                                                    <i class="fa fa-check-circle me-2"></i>Continuar con el Pago
+                                                                        onclick="bpIniciarValidacionAutomatica()">
+                                                                    <i class="fa fa-check-circle me-2"></i>Ya pagué
                                                                 </button>
                                                             </div>
 
@@ -296,8 +297,33 @@
                                                         </div>
                                                     </div>
                                                 </div>
-                                            </div>
+</div>
                                         </t>
+
+                                        <!-- SECCIÓN DE RUEDA DE CARGA (SPINNER) -->
+                                        <div id="bpLoadingSection" class="text-center py-4 d-none fade-in-section">
+                                            <div class="spinner-border spinner-bdv mb-3 text-primary" role="status" style="width: 3rem; height: 3rem;">
+                                                <span class="visually-hidden">Validando...</span>
+                                            </div>
+                                            <h4 class="fw-bold text-dark mb-2">Validando su pago</h4>
+                                            <p class="text-muted small px-3">
+                                                Consultando notificación con el Banco de Venezuela por el monto de 
+                                                <strong><t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> Bs</strong>...
+                                            </p>
+                                        </div>
+
+                                        <!-- NOTIFICACIÓN SI LLEGA MIENTRAS LLENA MANUAL (PUNTO 3) -->
+                                        <div id="bpAutoSuccessAlert" class="alert alert-success d-none text-center p-3 mb-4">
+                                            <h5 class="fw-bold mb-1"><i class="fa fa-check-circle me-1"></i>¡Pago confirmado por el banco!</h5>
+                                            <p class="small mb-0">Hemos recibido la confirmación automática. Redirigiendo...</p>
+                                        </div>
+
+                                        <!-- CONTENEDOR DEL FORMULARIO MANUAL (OCULTO INICIALMENTE) -->
+                                        <div id="bpManualFormSection" class="d-none">
+                                            <div class="alert alert-warning small mb-3">
+                                                <i class="fa fa-info-circle me-1"></i>
+                                                Aún no recibimos la notificación automática. Confirma los datos de tu comprobante para conciliar:
+                                            </div>
 
                                         <!-- Formulario de Pago Móvil -->
                                         <form action="/pago/bdv/procesar" method="post">
@@ -405,6 +431,7 @@
                                                 </small>
                                             </div>
                                         </form>
+                                        </div> 
                                     </div>
                                 </div>
                             </div>
@@ -484,17 +511,121 @@
                             }, 3000);
                         }
 
-                        function bpCloseComercioModal() {
+var txHash = "<t t-esc='hash'/>";
+                        var pollingInterval = null;
+                        var pollingCount = 0;
+                        var MAX_POLLING_ATTEMPTS = 5;
+
+                        function bpIniciarValidacionAutomatica() {
+                            // 1. Cerrar modal del comercio con animación suave
                             var modal = document.getElementById('comercioModal');
                             if (modal) {
                                 modal.style.opacity = '0';
                                 modal.style.transition = 'opacity 0.3s ease';
                                 setTimeout(function() {
                                     modal.style.display = 'none';
-                                    var firstInput = document.querySelector('form select[name="banco"]');
-                                    if (firstInput) firstInput.focus();
                                 }, 300);
                             }
+
+                            // 2. Mostrar Spinner de carga animado
+                            var loader = document.getElementById('bpLoadingSection');
+                            if (loader) {
+                                loader.classList.remove('d-none');
+                            }
+
+                            // Preconfigurar fecha de hoy en el formulario manual
+                            var inputFecha = document.querySelector('input[name="fecha_pago"]');
+                            if (inputFecha && !inputFecha.value) {
+                                inputFecha.value = new Date().toISOString().split('T')[0];
+                            }
+
+                            pollingCount = 0;
+                            // 3. Ejecutar polling cada 1 segundo (hasta 5 segundos)
+                            pollingInterval = setInterval(bpConsultarEstadoNotificacion, 1000);
+                        }
+
+                        function bpConsultarEstadoNotificacion() {
+                            pollingCount++;
+
+                            fetch('/api/bestpay/v1/bdv/checkout/check_status', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    method: "call",
+                                    params: {
+                                        hash: txHash
+                                    }
+                                })
+                            })
+                            .then(function(res) { return res.json(); })
+                            .then(function(data) {
+                                var res = data.result || {};
+                                if (res.status === 'done') {
+                                    // Match encontrado exitosamente
+                                    clearInterval(pollingInterval);
+                                    window.location.href = res.redirect_url || window.location.href;
+                                } else if (pollingCount >= MAX_POLLING_ATTEMPTS) {
+                                    // Timeout de 5s cumplido -> Transición al formulario manual
+                                    clearInterval(pollingInterval);
+                                    bpMostrarFormularioManual();
+                                    // Iniciar escucha pasiva por si la notificación llega tarde
+                                    setInterval(bpSondeoSilenciosoTardio, 3000);
+                                }
+                            })
+                            .catch(function(err) {
+                                console.error("[BestPay Polling Error]", err);
+                                if (pollingCount >= MAX_POLLING_ATTEMPTS) {
+                                    clearInterval(pollingInterval);
+                                    bpMostrarFormularioManual();
+                                }
+                            });
+                        }
+
+                        function bpMostrarFormularioManual() {
+                            var loader = document.getElementById('bpLoadingSection');
+                            if (loader) {
+                                loader.classList.add('d-none');
+                            }
+
+                            var manualForm = document.getElementById('bpManualFormSection');
+                            if (manualForm) {
+                                manualForm.classList.remove('d-none');
+                                manualForm.style.opacity = '0';
+                                manualForm.style.transition = 'opacity 0.4s ease';
+                                setTimeout(function() {
+                                    manualForm.style.opacity = '1';
+                                    var firstInput = document.querySelector('form select[name="banco"]');
+                                    if (firstInput) firstInput.focus();
+                                }, 50);
+                            }
+                        }
+
+                        function bpSondeoSilenciosoTardio() {
+                            fetch('/api/bestpay/v1/bdv/checkout/check_status', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    method: "call",
+                                    params: { hash: txHash }
+                                })
+                            })
+                            .then(function(res) { return res.json(); })
+                            .then(function(data) {
+                                var res = data.result || {};
+                                if (res.status === 'done') {
+                                    var formBox = document.getElementById('bpManualFormSection');
+                                    var alertBox = document.getElementById('bpAutoSuccessAlert');
+                                    if (formBox) formBox.classList.add('d-none');
+                                    if (alertBox) alertBox.classList.remove('d-none');
+                                    setTimeout(function() {
+                                        window.location.href = res.redirect_url || window.location.href;
+                                    }, 1500);
+                                }
+                            });
                         }
 
                         (function(){

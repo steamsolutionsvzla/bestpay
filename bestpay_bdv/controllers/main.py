@@ -368,9 +368,14 @@ class BestpayBDVController(http.Controller):
             # 📝 GUARDAR REGISTRO EN NOTIFICACIONES BANCARIAS
             # ==========================================
             try:
+                tel_crudo = str(payload.get('numeroCliente', '')).strip()
+                if tel_crudo and not tel_crudo.startswith('0'):
+                    tel_crudo = '0' + tel_crudo
+
                 request.env['bestpay.bank.notification'].sudo().create({
                     'provider_code': 'bdv',
                     'partner_id': partner.id if partner else False,
+                    'payer_phone': tel_crudo,
                     'external_ref': payload.get('referenciaBancoOrdenante', ''),
                     'amount': float(payload.get('monto', 0) or 0),
                     'status': 'received',
@@ -602,3 +607,56 @@ class BestpayBDVController(http.Controller):
         except Exception as e:
             _logger.error(f"[BDV MOVIMIENTOS API] Error: {str(e)}")
             return {'status': 'error', 'message': f'Error interno: {str(e)}'}
+
+    # =====================================================
+    # 8. API POLLING: VERIFICAR CASADO AUTOMÁTICO (Checkout)
+    # =====================================================
+    @http.route('/api/bestpay/v1/bdv/checkout/check_status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def bdv_checkout_check_status(self, hash=None, payer_phone=None, **kw):
+        """
+        Consulta si existe una notificación bancaria que case con la transacción.
+        Llave de búsqueda: Teléfono del pagador + Monto exacto (amount_ves).
+        """
+        if not hash:
+            return {'status': 'error', 'message': 'Falta el hash de la transacción.'}
+
+        tx = request.env['payment.transaction'].sudo().search([
+            ('uuid_hash', '=', hash)
+        ], limit=1)
+
+        if not tx.exists():
+            return {'status': 'error', 'message': 'Transacción no encontrada.'}
+
+        if tx.state == 'done':
+            return {
+                'status': 'done',
+                'message': 'Pago completado con éxito.',
+                'redirect_url': f"/pago/bdv/checkout?hash={hash}"
+            }
+
+        phone_to_match = payer_phone or tx.bdv_telefono_pagador or ''
+        if not phone_to_match and tx.payment_request_payload:
+            try:
+                orig_payload = json.loads(tx.payment_request_payload)
+                phone_to_match = orig_payload.get('customer_phone') or orig_payload.get('phone') or ''
+            except Exception:
+                pass
+
+        phone_to_match = str(phone_to_match).strip()
+        if phone_to_match and not phone_to_match.startswith('0'):
+            phone_to_match = '0' + phone_to_match
+
+        target_amount = tx.amount_ves if tx.amount_ves > 0 else tx.amount
+        matched = tx._bdv_attempt_auto_match_notification(phone=phone_to_match, amount=target_amount)
+
+        if matched:
+            return {
+                'status': 'done',
+                'message': '¡Pago casado automáticamente!',
+                'redirect_url': f"/pago/bdv/checkout?hash={hash}"
+            }
+
+        return {
+            'status': 'pending',
+            'message': 'Notificación aún no recibida.'
+        }
