@@ -899,8 +899,8 @@ class PaymentTransactionBDV(models.Model):
 
         _logger.info(f"[BDV NOTIFICACIÓN] Procesando: Referencia={referencia}, Tel={telefono_pagador}, Monto={monto}")
 
-        # ==========================================================
-        # BÚSQUEDA PRIORITARIA: Por Referencia (ÚNICA)
+# ==========================================================
+        # BÚSQUEDA: 1. Por Referencia | 2. Por Teléfono + Monto pendiente
         # ==========================================================
         tx = False
         if referencia:
@@ -909,6 +909,20 @@ class PaymentTransactionBDV(models.Model):
             ], limit=1)
             if tx:
                 _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} encontrada por referencia: {referencia}")
+
+        if not tx and partner and telefono_pagador:
+            monto_float = float(monto or 0.0)
+            tx = self.search([
+                ('partner_id', '=', partner.id),
+                ('state', 'not in', ['done', 'cancel', 'error']),
+                ('amount_ves', '>=', monto_float - 0.5),
+                ('amount_ves', '<=', monto_float + 0.5),
+                '|',
+                ('bdv_telefono_pagador', '=', telefono_pagador),
+                ('payment_request_payload', 'ilike', telefono_pagador),
+            ], order='create_date desc', limit=1)
+            if tx:
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} enlazada por Teléfono ({telefono_pagador}) y Monto ({monto_float})")
 
         # ==========================================================
         # ESCENARIO A: Transacción encontrada por referencia

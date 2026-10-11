@@ -514,7 +514,7 @@
 var txHash = "<t t-esc='hash'/>";
                         var pollingInterval = null;
                         var pollingCount = 0;
-                        var MAX_POLLING_ATTEMPTS = 5;
+                        var MAX_POLLING_ATTEMPTS = 12;
 
                         function bpIniciarValidacionAutomatica() {
                             // 1. Cerrar modal del comercio con animación suave
