@@ -232,6 +232,7 @@ class BestPayWebhookController(http.Controller):
                 'provider_reference': guid,
                 'bank_in_log': incoming_raw_json,
                 'bank_out_log': outgoing_response_json,
+                'mercantil_paid_by_manual_search': False,
             })
 
             # 6. Marcar Transacción como Exitosa

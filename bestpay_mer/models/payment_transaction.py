@@ -3,8 +3,8 @@ import base64
 import json
 import logging
 import hashlib
-import requests
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
@@ -66,6 +66,29 @@ class PaymentTransaction(models.Model):
         string="Monto VES al Generar el Link",
         currency_field='currency_ves_id',
         readonly=True
+    )
+
+    mercantil_offered_amount_history = fields.Text(
+        string="Historial de montos ofrecidos Mercantil",
+        default='[]',
+        readonly=True,
+        copy=False,
+        help="Montos VES y tasas usados al generar enlaces bancarios de esta transacción."
+    )
+
+    mercantil_paid_by_manual_search = fields.Boolean(
+        string="Pago confirmado por consulta manual Mercantil",
+        default=False,
+        readonly=True,
+        copy=False,
+        help="Indica que una consulta manual de Mercantil fue la que confirmó el pago."
+    )
+
+    mercantil_search_ids = fields.One2many(
+        'bestpay.mercantil.operation.search',
+        'transaction_id',
+        string="Consultas de Operación Mercantil",
+        readonly=True,
     )
 
     # =========================================================================
@@ -168,6 +191,12 @@ class PaymentTransaction(models.Model):
         self.ensure_one()
         partner = self.bestpay_client_id
 
+        if not self.mercantil_offered_amount_history and self.payment_link_bank_mer_amount_ves:
+            legacy_history = self._get_mercantil_offered_amount_history()
+            self.write({
+                'mercantil_offered_amount_history': json.dumps(legacy_history, ensure_ascii=False),
+            })
+
         self._bestpay_action_recalculate_jit_ves()
 
         link_expired = (
@@ -186,6 +215,7 @@ class PaymentTransaction(models.Model):
         encrypted_data = self._encrypt_transaction_data()
         custom_link = f"{mercantil_payment_url}/?merchantid={merchant_id}&transactiondata={encrypted_data}&integratorid={integrator_id}"
 
+        self._record_mercantil_offered_amount()
         self.write({
             'payment_link_bank_mer': custom_link,
             'payment_link_bank_mer_date': fields.Datetime.now(),
@@ -193,6 +223,63 @@ class PaymentTransaction(models.Model):
         })
 
         return custom_link
+
+    def _get_mercantil_offered_amount_history(self):
+        self.ensure_one()
+        try:
+            history = json.loads(self.mercantil_offered_amount_history or '[]')
+        except (TypeError, json.JSONDecodeError):
+            _logger.warning(
+                "[BESTPAY MERCANTIL] Historial de montos inválido en transacción %s.",
+                self.reference,
+            )
+            history = []
+        if not isinstance(history, list):
+            history = []
+
+        if not history and self.payment_link_bank_mer_amount_ves:
+            history = [{
+                'amount_ves': f"{self.payment_link_bank_mer_amount_ves:.2f}",
+                'exchange_rate_bcv': str(self.exchange_rate_bcv or 0.0),
+                'offered_at': fields.Datetime.to_string(
+                    self.payment_link_bank_mer_date or fields.Datetime.now()
+                ),
+            }]
+        return [
+            entry for entry in history
+            if isinstance(entry, dict) and entry.get('amount_ves') is not None
+        ]
+
+    def _record_mercantil_offered_amount(self):
+        self.ensure_one()
+        history = self._get_mercantil_offered_amount_history()
+        amount = f"{self.amount_ves:.2f}"
+        rate = str(self.exchange_rate_bcv or 0.0)
+        if not any(
+            str(entry.get('amount_ves')) == amount
+            and str(entry.get('exchange_rate_bcv', '0.0')) == rate
+            for entry in history
+        ):
+            history.append({
+                'amount_ves': amount,
+                'exchange_rate_bcv': rate,
+                'offered_at': fields.Datetime.to_string(fields.Datetime.now()),
+            })
+        self.write({'mercantil_offered_amount_history': json.dumps(history, ensure_ascii=False)})
+
+    def _find_mercantil_offered_amount(self, amount):
+        self.ensure_one()
+        requested_amount = Decimal(str(amount)).quantize(Decimal('0.01'))
+        matches = []
+        for entry in self._get_mercantil_offered_amount_history():
+            try:
+                offered_amount = Decimal(str(entry['amount_ves'])).quantize(Decimal('0.01'))
+                offered_rate = Decimal(str(entry.get('exchange_rate_bcv', '0.0')))
+            except (InvalidOperation, TypeError, KeyError):
+                continue
+            if offered_amount == requested_amount:
+                matches.append((entry, offered_amount, offered_rate))
+        return matches[-1] if matches else False
 
     # =========================================================================
     # FUNCIONES DE CONSTRUCCIÓN Y ENCRIPTACIÓN (MERCANTIL)
@@ -280,6 +367,28 @@ class PaymentTransaction(models.Model):
         return base64.b64encode(encrypted).decode('utf-8')
 
     @api.model
+    def _mercantil_encrypt_search_value(self, value, secret_key):
+        key_hash = hashlib.sha256(secret_key.encode('utf-8')).digest()[:16]
+        cipher = AES.new(key_hash, AES.MODE_ECB)
+        encrypted = cipher.encrypt(pad(value.encode('utf-8'), AES.block_size))
+        return base64.b64encode(encrypted).decode('ascii')
+
+    def action_open_mercantil_operation_search(self):
+        self.ensure_one()
+        if self.provider_id.code != 'mer' or self.state not in ('draft', 'pending'):
+            raise UserError(_("Solo se pueden consultar transacciones Mercantil en borrador o pendientes."))
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _("Consultar operación Mercantil"),
+            'res_model': 'bestpay.mercantil.operation.search.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_transaction_id': self.id,
+            },
+        }
+
+    @api.model
     def _webhook_3ro_is_retryable(self, status_code):
         """
         Determina si tiene sentido reintentar la notificación según el resultado.
@@ -311,7 +420,10 @@ class PaymentTransaction(models.Model):
         # Verificar si el cliente tiene configurada una URL de webhook
         partner = self.bestpay_client_id or self.partner_id
         if not partner or not partner.webhook_url_3ro:
-            _logger.info(f"[WEBHOOK TERCERO] El cliente {partner.name} no tiene configurada una webhook_url_3ro.")
+            _logger.info(
+                "[WEBHOOK TERCERO] El cliente %s no tiene configurada una webhook_url_3ro.",
+                partner.name if partner else "desconocido",
+            )
             if self.webhook_3ro_state != 'na':
                 self.write({'webhook_3ro_state': 'na'})
             return False
@@ -335,29 +447,14 @@ class PaymentTransaction(models.Model):
         }
 
         payload_json = json.dumps(payload, ensure_ascii=False, indent=4)
-        status_code = None
-        success = False
-
-        try:
-            _logger.info(f"[WEBHOOK TERCERO] Intento #{attempts} hacia {webhook_url} para transacción {self.reference}")
-            response = requests.post(
-                webhook_url,
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=10
-            )
-            status_code = response.status_code
-            response_body = f"HTTP {response.status_code}\n\n{response.text}"
-            success = response.status_code in (200, 201, 204)
-
-            result = self._bestpay_send_encrypted_webhook(payload, partner)
-            status_code = response.status_code
-            response_body = f"HTTP {response.status_code}\n\n{response.text}"
-            success = response.status_code in (200, 201, 204)
-        
-        except requests.exceptions.RequestException as e:
-            _logger.error(f"[WEBHOOK TERCERO] Error de conexión al notificar Tx {self.reference}: {str(e)}")
-            response_body = f"ERROR DE CONEXIÓN (sin respuesta del tercero):\n\n{str(e)}"
+        _logger.info(f"[WEBHOOK TERCERO] Intento #{attempts} hacia {webhook_url} para transacción {self.reference}")
+        result = self._bestpay_send_encrypted_webhook(payload, partner)
+        status_code = result.get('status_code')
+        success = result.get('success', False)
+        if status_code is not None:
+            response_body = f"HTTP {status_code}\n\n{result.get('response', '')}"
+        else:
+            response_body = f"ERROR DE CONEXIÓN O CIFRADO:\n\n{result.get('response', '')}"
 
         vals = {
             'webhook_3ro_payload': payload_json,

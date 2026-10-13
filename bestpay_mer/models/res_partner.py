@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields
+from odoo import models, fields, _
+from odoo.exceptions import UserError
+from odoo.http import request
 
 class ResPartner(models.Model):
     _inherit = 'res.partner'
@@ -21,6 +23,40 @@ class ResPartner(models.Model):
         string="Clave Secreta Mercantil (Secret Key)",
         help="Clave secreta utilizada para la encriptación AES-ECB de las transacciones."
     )
+    mercantil_search_url = fields.Char(
+        string="URL de Consulta de Operaciones",
+        help="URL del endpoint integrated-search de Mercantil para sandbox o producción."
+    )
+    mercantil_search_client_id = fields.Char(
+        string="X-IBM-Client-Id",
+        help="Client ID requerido por el API de consulta de operaciones Mercantil."
+    )
+    mercantil_terminal_id = fields.Char(
+        string="Terminal ID Mercantil",
+        help="Identificador del terminal enviado en merchantIdentify."
+    )
+    mercantil_account_number = fields.Char(
+        string="Cuenta Mercantil del Comercio",
+        help="Cuenta del comercio usada para consultar transferencias bancarias."
+    )
+    mercantil_merchant_phone = fields.Char(
+        string="Teléfono Mercantil del Comercio",
+        help="Teléfono del comercio usado para consultar pagos móviles."
+    )
+    mercantil_search_browser_agent = fields.Char(
+        string="Browser Agent de Consulta",
+        default="Chrome",
+        help="Valor clientIdentify.browserAgent enviado al API. Ejemplo: Chrome."
+    )
+    mercantil_search_ip_address = fields.Char(
+        string="IP de Consulta",
+        help="Valor clientIdentify.ipAddress enviado al API. Debe configurarse según los requisitos del banco."
+    )
+    mercantil_search_manufacturer = fields.Char(
+        string="Fabricante de Consulta",
+        default="Samsung",
+        help="Valor clientIdentify.mobile.manufacturer enviado al API. Ejemplo: Samsung."
+    )
 
     # Configuración de flujos y URLs del tercero
     mercantil_payment_concepts = fields.Char(
@@ -36,3 +72,26 @@ class ResPartner(models.Model):
         string="URL Webhook del Tercero",
         help="URL del sistema del tercero donde Odoo notificará de forma asíncrona cuando el banco confirme el pago."
     )
+
+    def action_capture_mercantil_search_ip(self):
+        self.ensure_one()
+        try:
+            detected_ip = request.httprequest.remote_addr
+        except RuntimeError as error:
+            raise UserError(_("La IP solo se puede detectar desde una sesión web activa.")) from error
+        if not detected_ip:
+            raise UserError(_("No se pudo detectar la IP de la sesión actual."))
+        self.mercantil_search_ip_address = detected_ip
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": _("IP detectada"),
+                "message": _(
+                    "Se guardó la IP de conexión al backend (%s). Verifique que sea el valor requerido "
+                    "por Mercantil; detrás de un proxy podría no ser la IP esperada."
+                ) % detected_ip,
+                "type": "warning",
+                "sticky": True,
+            },
+        }

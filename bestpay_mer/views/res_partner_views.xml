@@ -16,6 +16,21 @@
                                 <field name="mercantil_integrator_id" placeholder="Ej. 789" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
                                 <field name="mercantil_secret_key" password="True" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
                             </group>
+                            <group string="Consulta de Operaciones">
+                                <group>
+                                    <field name="mercantil_search_url" placeholder="https://apimbu.mercantilbanco.com/.../integrated-search"/>
+                                    <field name="mercantil_search_client_id"/>
+                                    <field name="mercantil_terminal_id"/>
+                                    <field name="mercantil_account_number"/>
+                                    <field name="mercantil_merchant_phone"/>
+                                </group>
+                                <group>
+                                    <field name="mercantil_search_browser_agent"/>
+                                    <field name="mercantil_search_ip_address"/>
+                                    <button name="action_capture_mercantil_search_ip" string="Detectar IP de esta sesión" type="object" class="btn-secondary"/>
+                                    <field name="mercantil_search_manufacturer"/>
+                                </group>
+                            </group>
                             <group>
                                 <field name="mercantil_payment_url" placeholder="https://getway.mercantilbanco.com/..."/>
                                 <field name="mercantil_payment_concepts"/>
