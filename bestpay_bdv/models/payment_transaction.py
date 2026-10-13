@@ -945,21 +945,21 @@ class PaymentTransactionBDV(models.Model):
                     })
                 return {'codigo': '01'}
 
-            # Si está en 'draft' o 'pending', la procesamos normalmente
             vals_to_write = {
                 'state': 'done',
                 'bdv_conciliation_state': 'approved',
                 'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+                'bdv_referencia': referencia,
+                'bdv_importe': float(monto or 0.0),
+                'bdv_telefono_pagador': telefono_pagador,
+                'bdv_cedula_pagador': cedula_pagador,
+                'bdv_banco_origen': banco_origen,
+                'bdv_fecha_pago': fecha_pago,
+                'bdv_hora_pago': payload.get('hora', ''),
                 'bdv_id_comercio': payload.get('idComercio', ''),
                 'bdv_numero_comercio': payload.get('numeroComercio', ''),
-                'bdv_hora_pago': payload.get('hora', ''),
-                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),  # Solo se llena aquí
+                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
             }
-            if not tx.bdv_banco_origen and banco_origen:
-                vals_to_write['bdv_banco_origen'] = banco_origen
-            if not tx.bdv_cedula_pagador and cedula_pagador and not cedula_pagador.startswith('V'):
-                vals_to_write['bdv_cedula_pagador'] = cedula_pagador
-
             tx.write(vals_to_write)
             _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Referencia: {referencia})")
 

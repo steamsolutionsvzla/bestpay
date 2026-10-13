@@ -653,8 +653,9 @@ class BestpayBDVController(http.Controller):
             return {
                 'status': 'done',
                 'message': '¡Pago casado automáticamente!',
-                'redirect_url': f"/pago/bdv/checkout?hash={hash}"
+                'redirect_url': f"/pago/bdv/checkout?hash={hash}&status=success"
             }
+
 
         return {
             'status': 'pending',
