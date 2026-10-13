@@ -511,10 +511,11 @@
                             }, 3000);
                         }
 
-var txHash = "<t t-esc='hash'/>";
+                        var urlParams = new URLSearchParams(window.location.search);
+                        var txHash = urlParams.get('hash') || '';
                         var pollingInterval = null;
                         var pollingCount = 0;
-                        var MAX_POLLING_ATTEMPTS = 25;
+                        var MAX_POLLING_ATTEMPTS = 12;
 
                         function bpIniciarValidacionAutomatica() {
                             // 1. Cerrar modal del comercio con animación suave
@@ -544,8 +545,9 @@ var txHash = "<t t-esc='hash'/>";
                             pollingInterval = setInterval(bpConsultarEstadoNotificacion, 1000);
                         }
 
-                        function bpConsultarEstadoNotificacion() {
+function bpConsultarEstadoNotificacion() {
                             pollingCount++;
+                            console.log("[POLLING JS] Intento #" + pollingCount + " de " + MAX_POLLING_ATTEMPTS + " para Hash: " + txHash);
 
                             fetch('/api/bestpay/v1/bdv/checkout/check_status', {
                                 method: 'POST',
@@ -562,21 +564,21 @@ var txHash = "<t t-esc='hash'/>";
                             })
                             .then(function(res) { return res.json(); })
                             .then(function(data) {
+                                console.log("[POLLING JS] Respuesta del servidor:", data);
                                 var res = data.result || {};
                                 if (res.status === 'done') {
-                                    // Match encontrado exitosamente
+                                    console.log("[POLLING JS] ✅ Servidor confirmó 'done'. Ejecutando window.location.reload()");
                                     clearInterval(pollingInterval);
-                                    window.location.href = res.redirect_url || window.location.href;
+                                    window.location.reload();
                                 } else if (pollingCount >= MAX_POLLING_ATTEMPTS) {
-                                    // Timeout de 5s cumplido -> Transición al formulario manual
+                                    console.warn("[POLLING JS] ⚠️ Límite de intentos alcanzado. Mostrando formulario manual.");
                                     clearInterval(pollingInterval);
                                     bpMostrarFormularioManual();
-                                    // Iniciar escucha pasiva por si la notificación llega tarde
                                     setInterval(bpSondeoSilenciosoTardio, 3000);
                                 }
                             })
                             .catch(function(err) {
-                                console.error("[BestPay Polling Error]", err);
+                                console.error("[POLLING JS] ❌ Error en fetch:", err);
                                 if (pollingCount >= MAX_POLLING_ATTEMPTS) {
                                     clearInterval(pollingInterval);
                                     bpMostrarFormularioManual();
@@ -614,7 +616,7 @@ var txHash = "<t t-esc='hash'/>";
                                 })
                             })
                             .then(function(res) { return res.json(); })
-                            .then(function(data) {
+                                .then(function(data) {
                                 var res = data.result || {};
                                 if (res.status === 'done') {
                                     var formBox = document.getElementById('bpManualFormSection');
@@ -622,8 +624,8 @@ var txHash = "<t t-esc='hash'/>";
                                     if (formBox) formBox.classList.add('d-none');
                                     if (alertBox) alertBox.classList.remove('d-none');
                                     setTimeout(function() {
-                                        window.location.href = res.redirect_url || window.location.href;
-                                    }, 1500);
+                                        window.location.reload();
+                                    }, 500);
                                 }
                             });
                         }

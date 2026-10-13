@@ -611,13 +611,18 @@ class BestpayBDVController(http.Controller):
     # =====================================================
     # 8. API POLLING: VERIFICAR CASADO AUTOMÁTICO (Checkout)
     # =====================================================
+# =====================================================
+    # 8. API POLLING: VERIFICAR CASADO AUTOMÁTICO (Checkout)
+    # =====================================================
     @http.route('/api/bestpay/v1/bdv/checkout/check_status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
     def bdv_checkout_check_status(self, hash=None, payer_phone=None, **kw):
         """
         Consulta si existe una notificación bancaria que case con la transacción.
-        Llave de búsqueda: Teléfono del pagador + Monto exacto (amount_ves).
         """
+        _logger.info(f"[POLLING LOG] >>> Petición check_status recibida. Hash={hash}, PhoneParam={payer_phone}")
+
         if not hash:
+            _logger.warning("[POLLING LOG] ❌ Error: Hash ausente en la petición.")
             return {'status': 'error', 'message': 'Falta el hash de la transacción.'}
 
         tx = request.env['payment.transaction'].sudo().search([
@@ -625,9 +630,15 @@ class BestpayBDVController(http.Controller):
         ], limit=1)
 
         if not tx.exists():
+            _logger.warning(f"[POLLING LOG] ❌ Error: No existe TX con hash '{hash}'")
             return {'status': 'error', 'message': 'Transacción no encontrada.'}
 
+        # Forzar lectura fresca de PostgreSQL evitando caché en memoria
+        tx.invalidate_recordset(['state', 'bdv_referencia', 'amount_ves'])
+        _logger.info(f"[POLLING LOG] TX #{tx.id} encontrada | State='{tx.state}' | Ref='{tx.bdv_referencia}' | AmountVES={tx.amount_ves}")
+
         if tx.state == 'done':
+            _logger.info(f"[POLLING LOG] ✅ TX #{tx.id} ESTÁ EN DONE. Respondiendo status='done'")
             return {
                 'status': 'done',
                 'message': 'Pago completado con éxito.',
@@ -647,16 +658,19 @@ class BestpayBDVController(http.Controller):
             phone_to_match = '0' + phone_to_match
 
         target_amount = tx.amount_ves if tx.amount_ves > 0 else tx.amount
+        _logger.info(f"[POLLING LOG] TX #{tx.id} aún en '{tx.state}'. Evaluando auto-match: Phone={phone_to_match}, Monto={target_amount}")
+
         matched = tx._bdv_attempt_auto_match_notification(phone=phone_to_match, amount=target_amount)
 
         if matched:
+            _logger.info(f"[POLLING LOG] ✅ Auto-match ejecutado exitosamente para TX #{tx.id}")
             return {
                 'status': 'done',
                 'message': '¡Pago casado automáticamente!',
-                'redirect_url': f"/pago/bdv/checkout?hash={hash}&status=success"
+                'redirect_url': f"/pago/bdv/checkout?hash={hash}"
             }
 
-
+        _logger.info(f"[POLLING LOG] ⏳ TX #{tx.id} continúa pendiente. Respondiendo status='pending'")
         return {
             'status': 'pending',
             'message': 'Notificación aún no recibida.'
