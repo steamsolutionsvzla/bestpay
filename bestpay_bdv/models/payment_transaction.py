@@ -945,6 +945,18 @@ class PaymentTransactionBDV(models.Model):
                     })
                 return {'codigo': '01'}
 
+# Parsear fecha recibida del webhook del BDV
+        fecha_raw = payload.get('fecha', '')
+        fecha_pago = False
+        if fecha_raw:
+            try:
+                from datetime import datetime
+                fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date()
+            except Exception:
+                fecha_pago = fields.Date.today()
+        else:
+            fecha_pago = fields.Date.today()
+
             vals_to_write = {
                 'state': 'done',
                 'bdv_conciliation_state': 'approved',
