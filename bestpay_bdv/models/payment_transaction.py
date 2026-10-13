@@ -925,7 +925,7 @@ class PaymentTransactionBDV(models.Model):
                 _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} enlazada por Teléfono ({telefono_pagador}) y Monto ({monto_float})")
 
         # ==========================================================
-        # ESCENARIO A: Transacción encontrada por referencia
+        # ESCENARIO A: Transacción encontrada
         # ==========================================================
         if tx:
             # Si ya está 'done', enlazar notificación tardía sin duplicar pago ni cobro
@@ -945,17 +945,16 @@ class PaymentTransactionBDV(models.Model):
                     })
                 return {'codigo': '01'}
 
-# Parsear fecha recibida del webhook del BDV
-        fecha_raw = payload.get('fecha', '')
-        fecha_pago = False
-        if fecha_raw:
-            try:
-                from datetime import datetime
-                fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date()
-            except Exception:
+            # Parsear fecha recibida del webhook del BDV
+            fecha_raw = payload.get('fecha', '')
+            fecha_pago = False
+            if fecha_raw:
+                try:
+                    fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date()
+                except Exception:
+                    fecha_pago = fields.Date.today()
+            else:
                 fecha_pago = fields.Date.today()
-        else:
-            fecha_pago = fields.Date.today()
 
             vals_to_write = {
                 'state': 'done',
@@ -972,8 +971,6 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_numero_comercio': payload.get('numeroComercio', ''),
                 'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
             }
-            tx.write(vals_to_write)
-            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Referencia: {referencia})")
 
             # 🔗 ENLAZAR CON LA NOTIFICACIÓN BANCARIA
             notification = self.env['bestpay.bank.notification'].sudo().search([
@@ -984,11 +981,14 @@ class PaymentTransactionBDV(models.Model):
             ], limit=1, order='received_at DESC')
 
             if notification:
+                vals_to_write['bank_notification_id'] = notification.id
                 notification.write({
                     'transaction_id': tx.id,
                     'status': 'matched',
                 })
-                tx.write({'bank_notification_id': notification.id})
+
+            tx.write(vals_to_write)
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Referencia: {referencia})")
 
             try:
                 tx._bestpay_trigger_webhook_3ro()
