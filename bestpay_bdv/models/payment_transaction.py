@@ -899,7 +899,7 @@ class PaymentTransactionBDV(models.Model):
 
         _logger.info(f"[BDV NOTIFICACIÓN] Procesando: Referencia={referencia}, Tel={telefono_pagador}, Monto={monto}")
 
-# ==========================================================
+        # ==========================================================
         # BÚSQUEDA: 1. Por Referencia | 2. Por Teléfono + Monto pendiente
         # ==========================================================
         tx = False
@@ -925,19 +925,21 @@ class PaymentTransactionBDV(models.Model):
                 _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} enlazada por Teléfono ({telefono_pagador}) y Monto ({monto_float})")
 
         # ==========================================================
-        # ESCENARIO A: Transacción encontrada por referencia
+        # ESCENARIO A: Transacción encontrada
+        # ==========================================================
+# ==========================================================
+        # CASADO Y ACTUALIZACIÓN MUTUAMENTE EXCLUYENTE
         # ==========================================================
         if tx:
-            # Si ya está 'done', enlazar notificación tardía sin duplicar pago ni cobro
+            # Si ya está confirmada previamente
             if tx.state == 'done':
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya completada. Enlazando notificación como tardía.")
+                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya completada. Enlazando notificación tardía.")
                 late_notification = self.env['bestpay.bank.notification'].sudo().search([
                     ('partner_id', '=', partner.id),
                     ('external_ref', '=', referencia),
                     ('status', '=', 'received'),
                     ('provider_code', '=', 'bdv'),
                 ], limit=1, order='received_at DESC')
-
                 if late_notification:
                     late_notification.write({
                         'transaction_id': tx.id,
@@ -945,19 +947,15 @@ class PaymentTransactionBDV(models.Model):
                     })
                 return {'codigo': '01'}
 
-# Parsear fecha recibida del webhook del BDV
-        fecha_raw = payload.get('fecha', '')
-        fecha_pago = False
-        if fecha_raw:
+            # Extraer fecha
+            fecha_raw = payload.get('fecha', '')
             try:
-                from datetime import datetime
-                fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date()
+                fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date() if fecha_raw else fields.Date.today()
             except Exception:
                 fecha_pago = fields.Date.today()
-        else:
-            fecha_pago = fields.Date.today()
 
-            vals_to_write = {
+            # Escribir datos bancarios y confirmar la transacción existente
+            tx.write({
                 'state': 'done',
                 'bdv_conciliation_state': 'approved',
                 'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
@@ -971,11 +969,9 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_id_comercio': payload.get('idComercio', ''),
                 'bdv_numero_comercio': payload.get('numeroComercio', ''),
                 'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
-            }
-            tx.write(vals_to_write)
-            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} marcada como pagada (Referencia: {referencia})")
+            })
 
-            # 🔗 ENLAZAR CON LA NOTIFICACIÓN BANCARIA
+            # Enlazar con registro de notificación bancaria
             notification = self.env['bestpay.bank.notification'].sudo().search([
                 ('partner_id', '=', partner.id),
                 ('external_ref', '=', referencia),
@@ -990,6 +986,8 @@ class PaymentTransactionBDV(models.Model):
                 })
                 tx.write({'bank_notification_id': notification.id})
 
+            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} actualizada y confirmada (Referencia: {referencia})")
+
             try:
                 tx._bestpay_trigger_webhook_3ro()
             except Exception as e:
@@ -997,61 +995,58 @@ class PaymentTransactionBDV(models.Model):
 
             return {'codigo': '00'}
 
-        # ==========================================================
-        # ESCENARIO B: NO existe TX con esa referencia → Crear nueva
-        # ==========================================================
-        _logger.info(f"[BDV NOTIFICACIÓN] Nueva transacción. Referencia: {referencia}, Tel: {telefono_pagador}, Monto: {monto}")
-
-        provider = self.env['payment.provider'].sudo().search([
-            ('code', '=', 'bdv'),
-            ('is_bestpay_provider', '=', True),
-        ], limit=1)
-
-        currency_ves = self.env['res.currency'].sudo().search([('name', '=', 'VES')], limit=1)
-
-        try:
-            new_tx = self.create({
-                'provider_id': provider.id if provider else False,
-                'partner_id': partner.id if partner else False,
-                'amount': monto,
-                'currency_id': currency_ves.id if currency_ves else False,
-                'amount_ves': monto,
-                'state': 'done',
-                'bdv_conciliation_state': 'approved',
-                'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
-                'bdv_referencia': referencia,
-                'bdv_importe': monto,
-                'bdv_telefono_pagador': telefono_pagador,
-                'bdv_banco_origen': banco_origen,
-                'bdv_cedula_pagador': cedula_pagador if cedula_pagador else '',
-                'client_note': f"Pago notificado por BDV. Referencia: {referencia}",
-                'bdv_id_comercio': payload.get('idComercio', ''),
-                'bdv_numero_comercio': payload.get('numeroComercio', ''),
-                'bdv_hora_pago': payload.get('hora', ''),
-                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
-            })
-            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX creada: ID {new_tx.id}, Referencia: {referencia}")
-
-            # 🔗 ENLAZAR CON LA NOTIFICACIÓN BANCARIA
-            notification = self.env['bestpay.bank.notification'].sudo().search([
-                ('partner_id', '=', partner.id),
-                ('external_ref', '=', referencia),
-                ('status', '=', 'received'),
-                ('provider_code', '=', 'bdv'),
-            ], limit=1, order='received_at DESC')
-
-            if notification:
-                notification.write({
-                    'transaction_id': new_tx.id,
-                    'status': 'matched',
-                })
+        else:
+            # ==========================================================
+            # ESCENARIO B: NO EXISTE TRANSACCIÓN PREVIA -> CREAR NUEVA
+            # ==========================================================
+            _logger.info(f"[BDV NOTIFICACIÓN] Sin coincidencia previa. Creando TX: Ref {referencia}, Monto {monto}")
+            provider = self.env['payment.provider'].sudo().search([
+                ('code', '=', 'bdv'),
+                ('is_bestpay_provider', '=', True),
+            ], limit=1)
+            currency_ves = self.env['res.currency'].sudo().search([('name', '=', 'VES')], limit=1)
 
             try:
-                new_tx._bestpay_trigger_webhook_3ro()
-            except Exception as e:
-                _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook: {e}")
+                new_tx = self.create({
+                    'provider_id': provider.id if provider else False,
+                    'partner_id': partner.id if partner else False,
+                    'amount': monto,
+                    'currency_id': currency_ves.id if currency_ves else False,
+                    'amount_ves': monto,
+                    'state': 'done',
+                    'bdv_conciliation_state': 'approved',
+                    'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+                    'bdv_referencia': referencia,
+                    'bdv_importe': monto,
+                    'bdv_telefono_pagador': telefono_pagador,
+                    'bdv_banco_origen': banco_origen,
+                    'bdv_cedula_pagador': cedula_pagador or '',
+                    'client_note': f"Pago notificado por BDV. Referencia: {referencia}",
+                    'bdv_id_comercio': payload.get('idComercio', ''),
+                    'bdv_numero_comercio': payload.get('numeroComercio', ''),
+                    'bdv_hora_pago': payload.get('hora', ''),
+                    'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
+                })
 
-            return {'codigo': '00'}
-        except Exception as e:
-            _logger.error(f"[BDV NOTIFICACIÓN] Error creando TX: {e}", exc_info=True)
-            return {'codigo': '00'}
+                notification = self.env['bestpay.bank.notification'].sudo().search([
+                    ('partner_id', '=', partner.id),
+                    ('external_ref', '=', referencia),
+                    ('status', '=', 'received'),
+                    ('provider_code', '=', 'bdv'),
+                ], limit=1, order='received_at DESC')
+
+                if notification:
+                    notification.write({
+                        'transaction_id': new_tx.id,
+                        'status': 'matched',
+                    })
+
+                try:
+                    new_tx._bestpay_trigger_webhook_3ro()
+                except Exception as e:
+                    _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook: {e}")
+
+                return {'codigo': '00'}
+            except Exception as e:
+                _logger.error(f"[BDV NOTIFICACIÓN] Error creando TX: {e}", exc_info=True)
+                return {'codigo': '00'}
