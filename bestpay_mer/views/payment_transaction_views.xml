@@ -5,13 +5,6 @@
         <field name="model">payment.transaction</field>
         <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
         <field name="arch" type="xml">
-            <xpath expr="//header" position="inside">
-                <button name="action_open_mercantil_operation_search"
-                        string="Consultar operación Mercantil"
-                        type="object"
-                        class="btn-primary"
-                        invisible="provider_code != 'mer' or state not in ('draft', 'pending')"/>
-            </xpath>
             <xpath expr="//field[@name='bestpay_flow_type']" position="after">
                 <field name="payment_link_client_mer" widget="CopyClipboardURL" readonly="1" invisible="provider_code != 'mer'"/>
                 <field name="return_url_3ro" readonly="1" invisible="provider_code != 'mer'"/>
@@ -26,6 +19,13 @@
                       name="mercantil_operation_search"
                       invisible="provider_code != 'mer' or (state == 'done' and not mercantil_paid_by_manual_search)">
                     <field name="mercantil_paid_by_manual_search" invisible="1"/>
+                    <div class="mb-3">
+                        <button name="action_open_mercantil_operation_search"
+                                string="Consultar operación Mercantil"
+                                type="object"
+                                class="btn-primary"
+                                invisible="state not in ('draft', 'pending')"/>
+                    </div>
                     <group string="Montos ofrecidos históricamente">
                         <field name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'json'}"/>
                     </group>
