@@ -27,7 +27,7 @@
                                 invisible="state not in ('draft', 'pending')"/>
                     </div>
                     <group string="Montos ofrecidos históricamente">
-                        <field name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'json'}"/>
+                        <field name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                     </group>
                     <field name="mercantil_search_ids" nolabel="1">
                         <list create="0" delete="0" edit="0">
@@ -65,10 +65,10 @@
                                     </group>
                                 </group>
                                 <group string="Solicitud enviada">
-                                    <field name="request_payload" readonly="1" nolabel="1" widget="ace" options="{'mode': 'json'}"/>
+                                    <field name="request_payload" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
                                 </group>
                                 <group string="Respuesta del banco">
-                                    <field name="response_payload" readonly="1" nolabel="1" widget="ace" options="{'mode': 'json'}"/>
+                                    <field name="response_payload" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
                                 </group>
                             </sheet>
                         </form>
