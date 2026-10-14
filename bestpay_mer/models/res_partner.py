@@ -53,7 +53,7 @@ class ResPartner(models.Model):
         help="Valor clientIdentify.ipAddress enviado al API. Debe configurarse según los requisitos del banco."
     )
     mercantil_search_manufacturer = fields.Char(
-        string="Fabricante de Consulta",
+        string="Fabricante del dispositivo de la Consulta",
         default="Samsung",
         help="Valor clientIdentify.mobile.manufacturer enviado al API. Ejemplo: Samsung."
     )
