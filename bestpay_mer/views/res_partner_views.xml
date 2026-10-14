@@ -33,7 +33,7 @@
                                 <field name="mercantil_search_browser_agent"/>
                                 <field name="mercantil_search_manufacturer"/>
                                 <field name="mercantil_search_ip_address"/>
-                                <button name="action_capture_mercantil_search_ip" string="Detectar IP de esta sesión" type="object" class="btn-secondary"/>
+                                <!-- <button name="action_capture_mercantil_search_ip" string="Detectar IP de esta sesión" type="object" class="btn-secondary"/> -->
                             </group>
                         </group>
                         <group string="URLs de Redirección y Notificación (Tercero)">
