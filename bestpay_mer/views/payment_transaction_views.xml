@@ -14,6 +14,67 @@
             <xpath expr="//field[@name='external_reference']" position="after">
                 <field name="payment_link_bank_mer" widget="CopyClipboardURL" readonly="1" invisible="provider_code != 'mer'"/>
             </xpath>
+            <xpath expr="//notebook" position="inside">
+                <page string="Consultas Mercantil"
+                      name="mercantil_operation_search"
+                      invisible="provider_code != 'mer' or (state == 'done' and not mercantil_paid_by_manual_search)">
+                    <field name="mercantil_paid_by_manual_search" invisible="1"/>
+                    <div class="mb-3">
+                        <button name="action_open_mercantil_operation_search"
+                                string="Consultar operación Mercantil"
+                                type="object"
+                                class="btn-primary"
+                                invisible="state not in ('draft', 'pending')"/>
+                    </div>
+                    <group string="Montos ofrecidos históricamente">
+                        <field name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
+                    </group>
+                    <field name="mercantil_search_ids" nolabel="1">
+                        <list create="0" delete="0" edit="0">
+                            <field name="create_date"/>
+                            <field name="user_id"/>
+                            <field name="operation_type"/>
+                            <field name="payment_reference"/>
+                            <field name="amount"/>
+                            <field name="operation_date"/>
+                            <field name="result"/>
+                            <field name="message"/>
+                        </list>
+                        <form create="0" delete="0" edit="0">
+                            <sheet>
+                                <group>
+                                    <group string="Datos consultados">
+                                        <field name="user_id" readonly="1"/>
+                                        <field name="create_date" readonly="1"/>
+                                        <field name="operation_type" readonly="1"/>
+                                        <field name="customer_id" readonly="1"/>
+                                        <field name="customer_phone_number" readonly="1"/>
+                                        <field name="bank_code" readonly="1"/>
+                                        <field name="merchant_account_number" readonly="1"/>
+                                        <field name="merchant_phone_number" readonly="1"/>
+                                        <field name="payment_reference" readonly="1"/>
+                                        <field name="amount" readonly="1"/>
+                                        <field name="operation_date" readonly="1"/>
+                                        <field name="applied_offered_amount" readonly="1"/>
+                                        <field name="applied_exchange_rate" readonly="1"/>
+                                    </group>
+                                    <group string="Resultado">
+                                        <field name="result" readonly="1"/>
+                                        <field name="message" readonly="1"/>
+                                        <field name="http_status" readonly="1"/>
+                                    </group>
+                                </group>
+                                <group string="Solicitud enviada">
+                                    <field name="request_payload" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
+                                </group>
+                                <group string="Respuesta del banco">
+                                    <field name="response_payload" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
+                                </group>
+                            </sheet>
+                        </form>
+                    </field>
+                </page>
+            </xpath>
             <xpath expr="//group[@name='technical_logs']" position="inside">
                 <div colspan="2" class="row mt-3" invisible="not webhook_3ro_state or webhook_3ro_state == 'na'">
                     <label for="webhook_3ro_state" string="Notificación al Tercero" class="col-sm-3 col-form-label fw-bold"/>

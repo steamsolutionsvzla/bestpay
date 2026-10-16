@@ -21,6 +21,21 @@
                                 <field name="mercantil_payment_concepts"/>
                             </group>
                         </group>
+                        <group string="Consulta de Operaciones">
+                            <group>
+                                <field name="mercantil_search_url" placeholder="https://apimbu.mercantilbanco.com/.../integrated-search"/>
+                                <field name="mercantil_search_client_id"/>
+                                <field name="mercantil_terminal_id"/>
+                                <field name="mercantil_account_number"/>
+                                <field name="mercantil_merchant_phone"/>
+                            </group>
+                            <group>
+                                <field name="mercantil_search_browser_agent"/>
+                                <field name="mercantil_search_manufacturer"/>
+                                <field name="mercantil_search_ip_address"/>
+                                <!-- <button name="action_capture_mercantil_search_ip" string="Detectar IP de esta sesión" type="object" class="btn-secondary"/> -->
+                            </group>
+                        </group>
                         <group string="URLs de Redirección y Notificación (Tercero)">
                             <group>
                                 <field name="default_return_url_3ro" placeholder="https://ecommerce.com/order/success"/>
