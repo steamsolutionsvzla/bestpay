@@ -315,7 +315,7 @@ class BestPayApiController(http.Controller):
             recalcular = True
             tasa_para_guardar = round(monto_calculado_ves / monto_recibido, 4)
 
-        payload_recibido = kwargs # Ahora contiene los datos descifrados
+        payload_recibido = decrypted_data # Guardamos SOLO los datos limpios y descifrados
         
         # [Paso 6 - Creación del registro]
         try:
