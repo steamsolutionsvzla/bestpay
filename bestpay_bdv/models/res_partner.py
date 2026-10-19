@@ -99,13 +99,6 @@ class ResPartnerBDV(models.Model):
              "el flujo (éxito/error). Se usará en la Fase 5.",
         copy=False,
     )
-    bestpay_webhook_secret = fields.Char(
-        string="Secreto Webhook (HMAC-SHA256)",
-        help="Secreto compartido usado para firmar los webhooks salientes. "
-             "El tercero debe conocer este valor para validar la autenticidad.",
-        copy=False,
-        groups="base.group_system",
-    )
     bestpay_webhook_active = fields.Boolean(
         string="Webhook Activo",
         default=True,
