@@ -377,7 +377,7 @@ class BestPayApiController(http.Controller):
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
 
-        # 8. Respuesta exitosa
+         # 8. Respuesta exitosa
         payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
         response = self._bestpay_standard_response(
             tx=tx,
@@ -387,5 +387,20 @@ class BestPayApiController(http.Controller):
             payment_details=datos_banco,
             payment_link=payment_link,
         )
+        
+        # Guardamos en la DB la respuesta en texto plano para auditoría interna
         tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False, indent=4)})
+
+        # ========================================================================
+        # CIFRADO DE LA RESPUESTA (PATRÓN ESTANDARIZADO)
+        # ========================================================================
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            # Ciframos el diccionario de respuesta antes de enviarlo por la red
+            response = encrypt_payload(response, partner.bestpay_encryption_key)
+            _logger.info("✅ [API] Respuesta cifrada exitosamente para tx: %s", tx.reference)
+        except Exception as e:
+            _logger.error("❌ [API] Error cifrando respuesta: %s. Retornando en texto plano.", str(e))
+            # Si falla el cifrado, retornamos en texto plano para no romper el flujo
+        
         return response
