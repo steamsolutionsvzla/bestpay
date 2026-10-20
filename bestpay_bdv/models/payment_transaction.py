@@ -2,8 +2,6 @@
 import json
 import logging
 import requests
-import hmac
-import hashlib
 import secrets
 from datetime import datetime, timedelta
 from odoo import api, fields, models
@@ -666,14 +664,6 @@ class PaymentTransactionBDV(models.Model):
             },
             'bank_data': bank_data,
         }
-
-    def _bestpay_compute_webhook_signature_3ro(self, payload_str, secret):
-        """Calcula la firma HMAC-SHA256 del payload usando el secreto compartido."""
-        return hmac.new(
-            key=secret.encode('utf-8'),
-            msg=payload_str.encode('utf-8'),
-            digestmod=hashlib.sha256,
-        ).hexdigest()
 
     @api.model
     def _bestpay_process_pending_webhooks(self):

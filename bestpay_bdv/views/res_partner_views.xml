@@ -97,7 +97,6 @@
                                 placeholder="https://koole.midominio.com/pago/resultado"/>
                         </group>
                         <group>
-                            <field name="bestpay_webhook_secret" widget="password_toggle"/>
                             <field name="bestpay_webhook_active" widget="boolean_toggle"/>
                         </group>
                     </group>
