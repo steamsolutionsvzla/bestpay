@@ -62,20 +62,56 @@ class BestpayBDVController(http.Controller):
             })
         else:
             # --- 🎨 DATOS DEL COMERCIO PARA EL CHECKOUT ---
-            partner = transaction.partner_id  # ← ESTA LÍNEA ES LA QUE FALTABA
-            
+            # 1. El QR pertenece al COMERCIO receptor, no al cliente pagador.
+            # Se busca en la compañía del provider con sudo() para evitar bloqueos por ir.rule
+            merchant = (
+                transaction.provider_id.company_id.partner_id.sudo()
+                if transaction.provider_id and transaction.provider_id.company_id
+                else transaction.partner_id.sudo()
+            )
+
+            # Si el merchant principal no tiene QR configurado, evaluar si está en el partner de la transacción
+            if not merchant.bestpay_pagomovil_qr and transaction.partner_id.sudo().bestpay_pagomovil_qr:
+                merchant = transaction.partner_id.sudo()
+
+            _logger.warning(
+                f"🔍 DEBUG QR: TX={transaction.id} | Merchant ID={merchant.id} | "
+                f"Nombre={merchant.name} | ¿Tiene QR?: {bool(merchant.bestpay_pagomovil_qr)}"
+            )
+
+# 2. Manejo seguro de la imagen QR (evitar doble encode de base64)
+            qr_url = False
+            raw_qr = merchant.bestpay_pagomovil_qr
+            if raw_qr:
+                import base64
+                try:
+                    # En Odoo fields.Binary entrega string o bytes ya en base64
+                    if isinstance(raw_qr, bytes):
+                        raw_str = raw_qr.decode('utf-8').strip()
+                    else:
+                        raw_str = str(raw_qr).strip()
+
+                    # Verificar si ya es un base64 válido
+                    # Si no lo es, se captura en la excepción y se codifica
+                    base64.b64decode(raw_str, validate=True)
+                    qr_b64 = raw_str
+                except Exception:
+                    # Si eran bytes crudos de imagen, se codifican a base64
+                    qr_b64 = base64.b64encode(raw_qr if isinstance(raw_qr, bytes) else raw_qr.encode()).decode('utf-8')
+
+                qr_url = f"data:image/png;base64,{qr_b64}"
+
             comercio_data = {
-                'nombre': partner.bestpay_checkout_title or partner.name or 'Comercio',
-                'rif': partner.vat or '',
-                'logo_url': f"/web/image/res.partner/{partner.id}/image_1920" if partner.image_1920 else False,
-                'telefono_destino': getattr(partner, 'bdv_telefono_destino', '') or '',
-                'mensaje': partner.bestpay_checkout_message or '',
-                'color': partner.bestpay_checkout_primary_color or '#0033a0',
-                'pagomovil_telefono': partner.bestpay_pagomovil_telefono or '',
-                'pagomovil_rif': partner.bestpay_pagomovil_rif or '',
-                'pagomovil_banco': partner.bestpay_pagomovil_banco or '',
-                # 🆕 QR de Pago Móvil
-                'pagomovil_qr_url': f"/web/image/res.partner/{partner.id}/bestpay_pagomovil_qr" if partner.bestpay_pagomovil_qr else False,
+                'nombre': merchant.bestpay_checkout_title or merchant.name or 'Comercio',
+                'rif': merchant.vat or '',
+                'logo_url': f"/web/image/res.partner/{merchant.id}/image_1920" if merchant.image_1920 else False,
+                'telefono_destino': getattr(merchant, 'bdv_telefono_destino', '') or '',
+                'mensaje': merchant.bestpay_checkout_message or '',
+                'color': merchant.bestpay_checkout_primary_color or '#0033a0',
+                'pagomovil_telefono': merchant.bestpay_pagomovil_telefono or '',
+                'pagomovil_rif': merchant.bestpay_pagomovil_rif or '',
+                'pagomovil_banco': merchant.bestpay_pagomovil_banco or '',
+                'pagomovil_qr_url': qr_url,
             }
             
             # Renderiza el formulario de Pago Móvil
