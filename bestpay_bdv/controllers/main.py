@@ -401,36 +401,56 @@ class BestpayBDVController(http.Controller):
             _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente. Pasando al modelo...")
 
             # ==========================================
-            # 📝 GUARDAR REGISTRO EN NOTIFICACIONES BANCARIAS
+            # 📝 GUARDAR O ACTUALIZAR NOTIFICACIÓN (IDEMPOTENCIA)
             # ==========================================
+            existing_notification = False # Variable de control
             try:
+                external_ref = payload.get('referenciaBancoOrdenante', '')
                 tel_crudo = str(payload.get('numeroCliente', '')).strip()
                 if tel_crudo and not tel_crudo.startswith('0'):
                     tel_crudo = '0' + tel_crudo
 
-                request.env['bestpay.bank.notification'].sudo().create({
-                    'provider_code': 'bdv',
-                    'partner_id': partner.id if partner else False,
-                    'payer_phone': tel_crudo,
-                    'external_ref': payload.get('referenciaBancoOrdenante', ''),
-                    'amount': float(payload.get('monto', 0) or 0),
-                    'status': 'received',
-                    'raw_payload': json.dumps(payload, ensure_ascii=False, indent=2),
-                })
+                # Buscar si YA existe una notificación con esta referencia
+                existing_notification = request.env['bestpay.bank.notification'].sudo().search([
+                    ('external_ref', '=', external_ref),
+                    ('provider_code', '=', 'bdv'),
+                ], limit=1)
+
+                if existing_notification:
+                    # Ya existe → Solo actualizar timestamp (no crear duplicado)
+                    existing_notification.write({
+                        'received_at': fields.Datetime.now(),
+                    })
+                    _logger.info(f"[BDV] Re-notificación detectada. Referencia: {external_ref}. No se crea duplicado.")
+                else:
+                    # No existe → Crear nueva
+                    request.env['bestpay.bank.notification'].sudo().create({
+                        'provider_code': 'bdv',
+                        'partner_id': partner.id if partner else False,
+                        'payer_phone': tel_crudo,
+                        'external_ref': external_ref,
+                        'amount': float(payload.get('monto', 0) or 0),
+                        'status': 'received',
+                        'raw_payload': json.dumps(payload, ensure_ascii=False, indent=2),
+                    })
+                    _logger.info(f"[BDV] Nueva notificación creada. Referencia: {external_ref}")
+                    
             except Exception as e:
-                _logger.warning(f"[BDV] No se pudo guardar en Notificaciones Bancarias: {e}")
+                _logger.warning(f"[BDV] No se pudo guardar/actualizar Notificación: {e}")
             # ==========================================
 
             # 6. Delegar la lógica de negocio al modelo
             resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
 
-            # 7. Responder al BDV
-            if resultado['codigo'] == '01':
+            # 7. Responder al BDV (IDEMPOTENCIA)
+            if existing_notification or resultado.get('codigo') == '01':
+                # Si ya existía en BD o el modelo nos dijo que la TX ya estaba pagada
                 return Response(
                     json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
             else:
+                # Primera vez y procesada correctamente
                 return Response(
                     json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
                     status=200, content_type='application/json', headers=cors_headers
