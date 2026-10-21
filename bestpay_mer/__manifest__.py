@@ -15,6 +15,7 @@
         'data/ir_cron.xml',
         'views/res_partner_views.xml',
         'views/payment_transaction_views.xml',
+        'views/mercantil_operation_search_views.xml',
     ],
     'external_dependencies': {
         'python': ['Crypto'],

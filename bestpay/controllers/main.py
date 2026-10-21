@@ -86,9 +86,21 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
-        # 1. Validar credenciales M2M (Client Credentials)
+        # ========================================================================
+        # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO (OBLIGATORIO)
+        # ========================================================================
+        is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
+        if not is_encrypted:
+            return self._bestpay_standard_response(
+                status='error',
+                message='Payload debe estar cifrado con AES-256-GCM. Agregar header X-BestPay-Encrypted: true',
+                transaction_status='error'
+            )
+
+        # ========================================================================
+        # 2. VALIDAR CREDENCIALES M2M (Client Credentials) PARA OBTENER EL PARTNER
+        # ========================================================================
         auth_header = request.httprequest.headers.get('Authorization', '')
-        
         if not auth_header.startswith('Basic '):
             return self._bestpay_standard_response(
                 status='error',
@@ -97,7 +109,6 @@ class BestPayApiController(http.Controller):
             )
 
         try:
-            # Validamos que sea un token Basic bien formado y luego buscamos por el token codificado.
             encoded_token = auth_header[6:].strip()
             decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
             if ':' not in decoded_credentials:
@@ -109,7 +120,6 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
-        # Al usar auth='none', necesitamos forzar el uso de una base de datos
         if not request.db:
             return self._bestpay_standard_response(
                 status='error',
@@ -117,7 +127,6 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
-        # 2. Validar que el cliente exista
         partner = request.env['res.partner'].sudo().search([
             ('is_api_client', '=', True),
             ('bestpay_basic_token', '=', encoded_token),
@@ -130,7 +139,33 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
-        # 3. Leer los datos directamente de kwargs (inyectados por type='json')
+        # ========================================================================
+        # 3. DESCIFRAR EL PAYLOAD USANDO LA CLAVE DEL PARTNER
+        # ========================================================================
+        try:
+            from ..lib.crypto_utils import decrypt_payload
+            
+            # En type='json', Odoo ya puso el body parseado en kwargs
+            encrypted_data = kwargs
+            
+            # Desciframos usando la clave del partner que acabamos de validar
+            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
+            
+            # TRUCO: Actualizamos kwargs con los datos descifrados. 
+            # Así el resto de tu código sigue funcionando sin cambiar nada.
+            kwargs.update(decrypted_data)
+            
+        except Exception as e:
+            return self._bestpay_standard_response(
+                status='error',
+                message=f'Error descifrando payload: {str(e)}',
+                transaction_status='error'
+            )
+
+        # ========================================================================
+        # 4. RESTO DE TU LÓGICA (INTACTA, AHORA USA LOS DATOS DESCIFRADOS)
+        # ========================================================================
+        # 3. Leer los datos directamente de kwargs (ahora descifrados)
         provider_code = kwargs.get('provider')
         currency_code = kwargs.get('currency')
         amount = kwargs.get('amount')
@@ -152,42 +187,41 @@ class BestPayApiController(http.Controller):
                 ('state', 'not in', ['cancel', 'error']),
             ], limit=1, order='create_date desc')
 
-            if transaccion_existente:
-                # Caso 1: ya fue pagada -> nunca se crea una nueva, reutilizamos su link.
-                # (la pantalla /pago/bdv/checkout ya bloquea reprocesar un pago 'done', es seguro)
-                if transaccion_existente.state == 'done':
-                    return self._bestpay_standard_response(
-                        tx=transaccion_existente,
-                        status='success',
-                        message='Esta orden ya fue pagada.',
-                        transaction_status='done',
-                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
-                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
-                    )
-
-                # Caso 2: todavía no vence (< 24h desde su creación) -> reutilizamos el mismo link.
-                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
-                if transaccion_existente.create_date >= limite_expiracion:
-                    return self._bestpay_standard_response(
-                        tx=transaccion_existente,
-                        status='success',
-                        message='Reutilizando la transacción existente.',
-                        transaction_status=transaccion_existente.state,
-                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
-                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
-                    )
-
-                # Caso 3: venció y no se pagó -> la cancelamos y dejamos que el flujo normal
-                # de abajo cree una transacción nueva con el mismo external_reference.
-                transaccion_existente.write({
-                    'state': 'cancel',
-                    'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
-                })
-                _logger.info(
-                    "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
-                    transaccion_existente.reference, external_reference
+            if transaccion_existente.state == 'done':
+                response = self._bestpay_standard_response(
+                    tx=transaccion_existente,
+                    status='success',
+                    message='Esta orden ya fue pagada.',
+                    transaction_status='done',
+                    payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
+                    payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
                 )
-                # No hay return aquí a propósito: el código sigue hacia abajo y crea la nueva.
+                # CIFRAMOS ANTES DE RETORNAR
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(response, partner.bestpay_encryption_key)
+
+            limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
+            if transaccion_existente.create_date >= limite_expiracion:
+                response = self._bestpay_standard_response(
+                    tx=transaccion_existente,
+                    status='success',
+                    message='Reutilizando la transacción existente.',
+                    transaction_status=transaccion_existente.state,
+                    payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
+                    payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+                )
+                # CIFRAMOS ANTES DE RETORNAR
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(response, partner.bestpay_encryption_key)
+
+            transaccion_existente.write({
+                'state': 'cancel',
+                'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
+            })
+            _logger.info(
+                "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
+                transaccion_existente.reference, external_reference
+            )
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
@@ -208,22 +242,17 @@ class BestPayApiController(http.Controller):
         method_code = kwargs.get('payment_method')
         payment_method = False
         
-        # Intento 1: Si el tercero envió un método específico, lo buscamos y verificamos que pertenezca al proveedor
         if method_code:
             _logger.info(f"🔍 DEBUG: Buscando método '{method_code}' para proveedor ID: {provider.id if provider else 'NO HAY PROVEEDOR'}")
-            
             payment_method = request.env['payment.method'].sudo().search([
                 ('code', '=', str(method_code).lower()),
                 ('provider_ids', 'in', provider.id)
             ], limit=1)
-            
             _logger.info(f"🔍 DEBUG: Resultado de la búsqueda: {payment_method}")
 
-         # Intento 2 (Fallback): Si no lo envió o el código no era válido, tomamos el primero del proveedor
         if not payment_method:
             payment_method = provider.payment_method_ids[:1]
 
-        # VALIDACIÓN ESTRICTA: Si sigue sin haber método, ¡ERROR REAL! (No más silent fails)
         if not payment_method:
             return self._bestpay_standard_response(
                 status='error',
@@ -240,8 +269,6 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
         
-        # Forzamos la verificación/búsqueda de la tasa actual
-        # Creamos un registro dummy o usamos el entorno para invocar el método auxiliar
         tx_dummy = request.env['payment.transaction'].sudo().new()
         tasa_bcv = tx_dummy._get_bcv_rate_or_fetch()
 
@@ -259,15 +286,12 @@ class BestPayApiController(http.Controller):
                 message='El formato del campo "amount" es inválido.',
                 transaction_status='error'
             )
+            
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
         recalcular = False
-        tasa_para_guardar = tasa_bcv # Por defecto es la tasa USD -> VES
-
-        # Buscamos la moneda USD en Odoo solo para el caso de reconversión de VES
+        tasa_para_guardar = tasa_bcv
         currency_usd = request.env['res.currency'].sudo().search([('name', '=', 'USD')], limit=1)
-
-        # Variables temporales para el .create() que por defecto toman lo que viene de la API
         monto_final_odoo = monto_recibido
         currency_final = currency
 
@@ -276,44 +300,36 @@ class BestPayApiController(http.Controller):
             monto_odoo_usd = round(monto_recibido / tasa_bcv, 2)
             recalcular = False
             tasa_para_guardar = tasa_bcv 
-            
-            # CAMBIO CLAVE: Si es VES, el monto principal de Odoo será USD
             monto_final_odoo = monto_odoo_usd
             currency_final = currency_usd
             
         elif currency_code.upper() == 'USD':
             monto_calculado_ves = round(monto_recibido * tasa_bcv, 2)
             recalcular = True
-            tasa_para_guardar = tasa_bcv # Guarda la tasa USD -> VES
+            tasa_para_guardar = tasa_bcv
             
         elif currency_code.upper() == 'EUR':
-            # CASO 3: Viene en EUR (Mantenemos intacta tu lógica original)
             currency_eur = request.env['res.currency'].sudo().search([('name', '=', 'EUR')], limit=1)
             latest_rate_eur = request.env['res.currency.rate'].sudo().search([
                 ('currency_id', '=', currency_eur.id)
             ], order='name desc', limit=1)
             
             tasa_eur_en_usd = latest_rate_eur.rate if latest_rate_eur else 1.0
-            
-            # 1. Calculamos el USD base redondeado 
             monto_odoo_usd = round(monto_recibido / tasa_eur_en_usd, 2)
-            
-            # 2. Calculamos el monto final en VES usando el USD ya normalizado
             monto_calculado_ves = round(monto_odoo_usd * tasa_bcv, 2)
             recalcular = True
-            
-            # 3. La tasa guardada es el resultado real y neto de la operación
             tasa_para_guardar = round(monto_calculado_ves / monto_recibido, 4)
 
-        payload_recibido = kwargs
+        payload_recibido = decrypted_data # Guardamos SOLO los datos limpios y descifrados
+        
         # [Paso 6 - Creación del registro]
         try:
             internal_reference = f"BPAY-{external_reference}-{fields.Datetime.now().strftime('%Y%m%d%H%M%S')}"
             
             tx = request.env['payment.transaction'].sudo().create({
                 'reference': internal_reference,
-                'amount': monto_final_odoo, # Dinámico: Guarda USD si vino VES, o el original si vino USD/EUR
-                'currency_id': currency_final.id, # Dinámico: Moneda USD si vino VES, o la original si vino USD/EUR
+                'amount': monto_final_odoo,
+                'currency_id': currency_final.id,
                 'provider_id': provider.id,
                 'payment_method_id': payment_method.id,
                 'partner_id': partner.id,                  
@@ -321,7 +337,6 @@ class BestPayApiController(http.Controller):
                 'external_reference': external_reference,
                 'client_note': note,
                 'payment_request_payload': payload_recibido,
-                # Campos de control BestPay (Ahora todos los escenarios los aprovechan correctamente)
                 'amount_ves': monto_calculado_ves,
                 'exchange_rate_bcv': tasa_para_guardar,
                 'is_recalculable_ves': recalcular, 
@@ -338,12 +353,9 @@ class BestPayApiController(http.Controller):
             datos_banco = tx._bestpay_process_transaction_with_bank(kwargs)
         except Exception as e:
             error_msg = f'Error al comunicar con el banco: {str(e)}'
-            
-            # --- SOLUCIÓN: Marcamos la transacción como fallida en Odoo ---
             try:
                 tx._set_error(error_msg)
             except Exception as tx_err:
-                # Respaldo por si _set_error falla debido a alguna restricción interna de Odoo
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
             
             return self._bestpay_standard_response(
@@ -370,7 +382,7 @@ class BestPayApiController(http.Controller):
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
 
-        # 8. Respuesta exitosa
+         # 8. Respuesta exitosa
         payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
         response = self._bestpay_standard_response(
             tx=tx,
@@ -380,5 +392,20 @@ class BestPayApiController(http.Controller):
             payment_details=datos_banco,
             payment_link=payment_link,
         )
+        
+        # Guardamos en la DB la respuesta en texto plano para auditoría interna
         tx.write({'payment_request_response': json.dumps(response, ensure_ascii=False, indent=4)})
+
+        # ========================================================================
+        # CIFRADO DE LA RESPUESTA (PATRÓN ESTANDARIZADO)
+        # ========================================================================
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            # Ciframos el diccionario de respuesta antes de enviarlo por la red
+            response = encrypt_payload(response, partner.bestpay_encryption_key)
+            _logger.info("✅ [API] Respuesta cifrada exitosamente para tx: %s", tx.reference)
+        except Exception as e:
+            _logger.error("❌ [API] Error cifrando respuesta: %s. Retornando en texto plano.", str(e))
+            # Si falla el cifrado, retornamos en texto plano para no romper el flujo
+        
         return response
