@@ -200,28 +200,40 @@ class BestPayApiController(http.Controller):
                 from ..lib.crypto_utils import encrypt_payload
                 return encrypt_payload(response, partner.bestpay_encryption_key)
 
-            limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
-            if transaccion_existente.create_date >= limite_expiracion:
-                response = self._bestpay_standard_response(
-                    tx=transaccion_existente,
-                    status='success',
-                    message='Reutilizando la transacción existente.',
-                    transaction_status=transaccion_existente.state,
-                    payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
-                    payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+            # --- NUEVO: VALIDACIÓN DEFENSIVA PARA EVITAR EL ERROR DE FECHA ---
+            if not transaccion_existente.create_date:
+                _logger.warning(
+                    "[API] Transacción ID=%s (Ref: %s) encontrada sin fecha de creación (corrupta). Se cancela para permitir reintento.",
+                    transaccion_existente.id, external_reference
                 )
-                # CIFRAMOS ANTES DE RETORNAR
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(response, partner.bestpay_encryption_key)
+                transaccion_existente.write({
+                    'state': 'cancel',
+                    'state_message': 'Cancelada: fecha de creación inválida/corrupta.',
+                })
+            else:
+                # --- LÓGICA ORIGINAL (Solo se ejecuta si la fecha es válida) ---
+                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
+                if transaccion_existente.create_date >= limite_expiracion:
+                    response = self._bestpay_standard_response(
+                        tx=transaccion_existente,
+                        status='success',
+                        message='Reutilizando la transacción existente.',
+                        transaction_status=transaccion_existente.state,
+                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
+                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+                    )
+                    # CIFRAMOS ANTES DE RETORNAR
+                    from ..lib.crypto_utils import encrypt_payload
+                    return encrypt_payload(response, partner.bestpay_encryption_key)
 
-            transaccion_existente.write({
-                'state': 'cancel',
-                'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
-            })
-            _logger.info(
-                "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
-                transaccion_existente.reference, external_reference
-            )
+                transaccion_existente.write({
+                    'state': 'cancel',
+                    'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
+                })
+                _logger.info(
+                    "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
+                    transaccion_existente.reference, external_reference
+                )
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)

@@ -417,11 +417,9 @@ class BestpayBDVController(http.Controller):
                 ], limit=1)
 
                 if existing_notification:
-                    # Ya existe → Solo actualizar timestamp (no crear duplicado)
-                    existing_notification.write({
-                        'received_at': fields.Datetime.now(),
-                    })
-                    _logger.info(f"[BDV] Re-notificación detectada. Referencia: {external_ref}. No se crea duplicado.")
+                    # Ya existe → NO actualizar received_at (debe mantener la fecha original)
+                    # Solo logueamos que llegó una re-notificación
+                    _logger.info(f"[BDV] Re-notificación detectada. Referencia: {external_ref}. No se crea duplicado. Fecha original mantenida: {existing_notification.received_at}")
                 else:
                     # No existe → Crear nueva
                     request.env['bestpay.bank.notification'].sudo().create({
