@@ -7,7 +7,7 @@
                 web_icon="bestpay,static/description/icon.svg"/> 
 
         <record id="action_bestpay_transactions" model="ir.actions.act_window">
-            <field name="name">Transacciones API</field>
+            <field name="name">Link de Pago</field>
             <field name="res_model">payment.transaction</field>
             <field name="view_mode">list,form,kanban</field>
             <field name="help" type="html">
@@ -95,7 +95,7 @@
                 sequence="10"/>
 
         <menuitem id="menu_bestpay_sub_transactions"
-                name="Transacciones"
+                name="Link de Pago"
                 parent="menu_bestpay_operations"
                 action="action_bestpay_transactions"
                 sequence="10"/>
