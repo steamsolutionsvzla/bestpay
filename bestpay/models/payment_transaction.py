@@ -143,6 +143,27 @@ class PaymentTransaction(models.Model):
         help="Hash seguro y único utilizado para exponer la transacción en las URLs de redirección sin revelar el ID."
     )
 
+    bestpay_cancel_reason = fields.Text(
+        string="Motivo de cancelación",
+        copy=False,
+        readonly=True,
+        help="Motivo ingresado por el cliente al cancelar la transacción vía API."
+    )
+
+    bestpay_unpaid_reason = fields.Text(
+        string="Motivo paso a No pagado",
+        copy=False,
+        readonly=True,
+        help="Razón por la cual la transacción pasó a estado 'no pagado' (expiración de link)."
+    )
+
+    state = fields.Selection(
+        selection_add=[
+            ('no_pagado', 'No pagado'),
+        ],
+        ondelete={'no_pagado': 'set default'},
+    )
+
     @api.model_create_multi
     def create(self, vals_list):
         """
@@ -405,3 +426,32 @@ class PaymentTransaction(models.Model):
         except Exception as e:
             _logger.exception("[BESTPAY WEBHOOK] TX %s: Error inesperado.", self.id)
             return {'success': False, 'status_code': None, 'response': f'Error inesperado: {str(e)}'}
+
+    @api.model
+    def _cron_expire_pending_transactions(self, hours=48):
+        """Cron proactivo para pasar a 'no_pagado' las transacciones pending vencidas."""
+        try:
+            from datetime import timedelta
+            now = fields.Datetime.now()
+            limit_date = now - timedelta(hours=hours)
+            domain = [
+                ('state', '=', 'pending'),
+                ('create_date', '<', limit_date),
+            ]
+            txs = self.sudo().search(domain)
+            count = 0
+            for tx in txs:
+                try:
+                    tx.write({
+                        'state': 'no_pagado',
+                        'bestpay_unpaid_reason': f'Expirado por cron: link vencido después de {hours}h sin completar el pago.',
+                        'state_message': f'Pasada a No pagado: link vencido después de {hours}h sin completar el pago.',
+                    })
+                    count += 1
+                except Exception as e:
+                    _logger.error("[BESTPAY CRON][EXPIRE] Error expirando tx %s: %s", tx.id, e)
+            _logger.info("[BESTPAY CRON][EXPIRE] %s transacciones pasadas a no_pagado (>%sh)", count, hours)
+            return True
+        except Exception as e:
+            _logger.error("[BESTPAY CRON][EXPIRE] Error general: %s", e)
+            return False

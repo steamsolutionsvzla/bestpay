@@ -12,6 +12,7 @@
     ],
     'data': [
         'data/cron_bcv.xml',
+        'data/cron_expire_transactions.xml',
         'data/bestpay_menus.xml',
         'security/ir.model.access.csv',
         'views/res_partner_views.xml',

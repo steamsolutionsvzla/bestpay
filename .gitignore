@@ -221,3 +221,6 @@ docker-compose.yml
 /test.json
 /test_c2p.json
 /test_bestpay.py
+
+test_bestpay_query.py
+test_cancel.py
