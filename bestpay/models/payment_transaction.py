@@ -3,6 +3,7 @@ import logging
 import secrets
 import json
 import base64
+from datetime import timedelta
 from odoo import models, fields, api, _
     
 _logger = logging.getLogger(__name__)
@@ -110,6 +111,42 @@ class ResPartner(models.Model):
 
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
+
+    # Regla de negocio: el link de pago vence a las 48h desde su creación.
+    # Fuente única de verdad para la expiración (controlador, web y cron).
+    BESTPAY_LINK_EXPIRATION_HOURS = 48
+
+    def _bestpay_is_link_expired(self, hours=None, now=None):
+        """Indica si el link de pago ya venció según la fecha de creación de la transacción.
+
+        Se usa `create_date` (UTC, puesta por el servidor) y no la fecha del
+        formulario, porque esa la controla el cliente. Reutilizar la transacción
+        no reinicia el contador.
+        """
+        self.ensure_one()
+        hours = self.BESTPAY_LINK_EXPIRATION_HOURS if hours is None else hours
+        if not self.create_date:
+            return False
+        now = now or fields.Datetime.now()
+        return self.create_date <= now - timedelta(hours=hours)
+
+    def _bestpay_mark_as_unpaid(self, reason=None, hours=None):
+        """Pasa la transacción a 'no_pagado' dejando trazabilidad del motivo."""
+        self.ensure_one()
+        hours = self.BESTPAY_LINK_EXPIRATION_HOURS if hours is None else hours
+        reason = reason or (
+            f'Link expirado por tiempo ({hours}h) sin completar el pago.'
+        )
+        self.write({
+            'state': 'no_pagado',
+            'bestpay_unpaid_reason': reason,
+            'state_message': f'Pasada a No pagado: {reason}',
+        })
+        _logger.info(
+            "[BESTPAY] TX %s (%s) pasada a No pagado: %s",
+            self.id, self.reference, reason
+        )
+        return True
 
     amount_ves = fields.Monetary(
         string="Importe VES",
@@ -428,30 +465,37 @@ class PaymentTransaction(models.Model):
             return {'success': False, 'status_code': None, 'response': f'Error inesperado: {str(e)}'}
 
     @api.model
-    def _cron_expire_pending_transactions(self, hours=48):
-        """Cron proactivo para pasar a 'no_pagado' las transacciones pending vencidas."""
+    def _cron_expire_pending_transactions(self, hours=None):
+        """Cron proactivo para pasar a 'no_pagado' las transacciones vencidas sin pago.
+
+        Incluye 'draft' y 'pending': las transacciones de BestPay nacen en
+        'draft' y pasan a 'pending' al emitir el link. Así no queda ningún
+        link vivo si algo falla entre la creación y la emisión.
+        """
+        hours = self.BESTPAY_LINK_EXPIRATION_HOURS if hours is None else hours
         try:
-            from datetime import timedelta
             now = fields.Datetime.now()
             limit_date = now - timedelta(hours=hours)
             domain = [
-                ('state', '=', 'pending'),
+                ('state', 'in', ('draft', 'pending')),
                 ('create_date', '<', limit_date),
+                # Solo transacciones emitidas por la API (tienen payload original).
+                # Evita expirar registros creados por otros flujos de Odoo.
+                ('payment_request_payload', '!=', False),
             ]
             txs = self.sudo().search(domain)
             count = 0
             for tx in txs:
                 try:
-                    tx.write({
-                        'state': 'no_pagado',
-                        'bestpay_unpaid_reason': f'Expirado por cron: link vencido después de {hours}h sin completar el pago.',
-                        'state_message': f'Pasada a No pagado: link vencido después de {hours}h sin completar el pago.',
-                    })
+                    tx._bestpay_mark_as_unpaid(
+                        reason=f'Expirado por cron: link vencido después de {hours}h sin completar el pago.',
+                        hours=hours,
+                    )
                     count += 1
                 except Exception as e:
                     _logger.error("[BESTPAY CRON][EXPIRE] Error expirando tx %s: %s", tx.id, e)
             _logger.info("[BESTPAY CRON][EXPIRE] %s transacciones pasadas a no_pagado (>%sh)", count, hours)
-            return True
+            return count
         except Exception as e:
             _logger.error("[BESTPAY CRON][EXPIRE] Error general: %s", e)
-            return False
+            return 0

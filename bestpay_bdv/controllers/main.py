@@ -12,6 +12,29 @@ _logger = logging.getLogger(__name__)
 
 class BestpayBDVController(http.Controller):
 
+    def _bestpay_link_is_unavailable(self, transaction):
+        """Un link no es pagable si ya venció o si la transacción no está vigente.
+
+        Cubre el estado 'no_pagado' y también el caso en que el cron todavía
+        no ha marcado la transacción pero ya pasaron las 48h.
+        """
+        if transaction.state == 'no_pagado':
+            return True
+        return (
+            transaction.state in ('draft', 'pending')
+            and transaction._bestpay_is_link_expired()
+        )
+
+    def _bestpay_expired_link_response(self, transaction):
+        """Renderiza la pantalla de link vencido y sincroniza el estado si hace falta."""
+        if transaction.state in ('draft', 'pending') and transaction._bestpay_is_link_expired():
+            transaction._bestpay_mark_as_unpaid()
+        return request.render('bestpay_bdv.bdv_checkout_result', {
+            'transaction': transaction,
+            'status': 'error',
+            'message': 'Este link de pago venció. Por favor solicita uno nuevo desde Koole.'
+        })
+
     # =====================================================
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
     # =====================================================
@@ -47,6 +70,10 @@ class BestpayBDVController(http.Controller):
                 'status': 'error',
                 'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
             })
+
+        # Link vencido ('no_pagado' o más de 48h desde su creación): no se puede pagar.
+        if self._bestpay_link_is_unavailable(transaction):
+            return self._bestpay_expired_link_response(transaction)
 
         # Antes de mostrar el monto al usuario, refrescamos con la tasa BCV del día
         transaction._bestpay_action_recalculate_jit_ves()
@@ -157,6 +184,10 @@ class BestpayBDVController(http.Controller):
                 'status': 'error',
                 'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
             })
+
+        # Bloqueo del POST: evita pagar con el HTML ya abierto de un link vencido.
+        if self._bestpay_link_is_unavailable(transaction):
+            return self._bestpay_expired_link_response(transaction)
 
         # Mapear datos del formulario a los campos del modelo
         cedula_raw = post.get('cedula', '')

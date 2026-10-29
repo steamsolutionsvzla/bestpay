@@ -224,3 +224,7 @@ docker-compose.yml
 
 test_bestpay_query.py
 test_cancel.py
+test_create_retry.py
+test_cron_expire.py
+test_expire_check.py
+test_link_expired.py

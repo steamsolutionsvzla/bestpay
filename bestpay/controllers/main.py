@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import http, fields
 from odoo.http import request
-from datetime import timedelta
 import json
 import logging
 import base64
@@ -11,8 +10,6 @@ _logger = logging.getLogger(__name__)
 
 
 class BestPayApiController(http.Controller):
-
-    LINK_EXPIRATION_HOURS = 24  # Regla de negocio: los links de pago vencen a las 24h
 
     def _bestpay_normalize_payment_details(self, payment_details):
         if not isinstance(payment_details, dict):
@@ -211,9 +208,9 @@ class BestPayApiController(http.Controller):
                     'state_message': 'Cancelada: fecha de creación inválida/corrupta.',
                 })
             else:
-                # --- LÓGICA ORIGINAL (Solo se ejecuta si la fecha es válida) ---
-                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
-                if transaccion_existente.create_date >= limite_expiracion:
+                # --- LÓGICA DE EXPIRACIÓN DEL LINK ---
+                # El vencimiento se calcula con create_date + 48h (ver modelo).
+                if not transaccion_existente._bestpay_is_link_expired():
                     response = self._bestpay_standard_response(
                         tx=transaccion_existente,
                         status='success',
@@ -226,11 +223,7 @@ class BestPayApiController(http.Controller):
                     from ..lib.crypto_utils import encrypt_payload
                     return encrypt_payload(response, partner.bestpay_encryption_key)
 
-                transaccion_existente.write({
-                    'state': 'no_pagado',
-                    'bestpay_unpaid_reason': f'Link expirado por tiempo ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
-                    'state_message': f'Pasada a No pagado: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
-                })
+                transaccion_existente._bestpay_mark_as_unpaid()
                 _logger.info(
                     "[API] Transacción %s expirada, pasada a No pagado para permitir reintento (external_reference=%s)",
                     transaccion_existente.reference, external_reference
@@ -395,7 +388,13 @@ class BestPayApiController(http.Controller):
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
 
-         # 8. Respuesta exitosa
+        # 8. El link ya fue emitido: la transacción queda pendiente de pago.
+        # 'pending' permite que el cron de expiración y los filtros de estado
+        # reflejen que el link está vigente esperando pago.
+        if tx.state == 'draft':
+            tx._set_pending(state_message='Link de pago emitido, pendiente de pago.')
+
+         # 9. Respuesta exitosa
         payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
         response = self._bestpay_standard_response(
             tx=tx,
