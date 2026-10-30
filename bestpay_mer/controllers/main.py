@@ -156,7 +156,7 @@ class BestPayWebhookController(http.Controller):
         # 4. Link vencido: no se permite iniciar un pago nuevo ni generar otro link bancario.
         if self._bestpay_mer_link_is_expired(tx):
             return request.make_response(
-                "Error: Este link de pago venció. Solicita uno nuevo desde Koole.",
+                "Error: Este link de pago venció. Solicita un nuevo link de pago.",
                 status=400
             )
 
