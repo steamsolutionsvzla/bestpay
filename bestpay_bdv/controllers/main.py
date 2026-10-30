@@ -50,7 +50,7 @@ class BestpayBDVController(http.Controller):
             transaction._bestpay_mark_as_unpaid()
         return request.render('bestpay_bdv.bdv_checkout_result', {
             'transaction': transaction,
-            'status': 'error',
+            'status': 'expired',
             'message': 'Este link de pago venció. Por favor solicita uno nuevo desde Koole.'
         })
 
@@ -270,15 +270,6 @@ class BestpayBDVController(http.Controller):
                               f"Hoy es: {hoy.strftime('%d/%m/%Y')}.")
             
             _logger.info(f"[BDV] Fecha del pago validada: {fecha_pago} ({dias_diferencia} días atrás) - Ambiente: {env_type.upper()}")
-            
-        except ValueError:
-            raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")
-        except UserError:
-            raise
-        except Exception as e:
-            _logger.error(f"[BDV] Error procesando fecha: {str(e)}")
-            raise UserError("Error al procesar la fecha del pago.")
-        # =====================================================
             
         except ValueError:
             raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")

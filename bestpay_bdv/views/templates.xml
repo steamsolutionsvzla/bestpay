@@ -680,6 +680,8 @@ function bpConsultarEstadoNotificacion() {
                         }
                         .success-icon { color: #28a745; }
                         .error-icon { color: #dc3545; }
+                        .expired-icon { color: #f0ad4e; }
+                        .expired-title { color: #f0ad4e; }
                         .bp-ref-wrapper{
                             position: relative;
                             display: inline-block;
@@ -714,6 +716,11 @@ function bpConsultarEstadoNotificacion() {
                                             <i class="fa fa-check-circle result-icon success-icon"></i>
                                             <h2 class="text-success mb-3">¡Pago Verificado!</h2>
                                             <p class="lead text-muted mb-4">Tu pago ha sido procesado correctamente por el Banco de Venezuela.</p>
+                                        </t>
+                                        <t t-elif="status == 'expired'">
+                                            <i class="fa fa-hourglass-half result-icon expired-icon"></i>
+                                            <h2 class="expired-title mb-3">Link Expirado</h2>
+                                            <p class="lead text-muted mb-4"><t t-esc="message"/></p>
                                         </t>
                                         <t t-else="">
                                             <i class="fa fa-times-circle result-icon error-icon"></i>
