@@ -14,7 +14,7 @@
                             <group>
                                 <field name="mercantil_merchant_id" placeholder="Ej. 123456" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
                                 <field name="mercantil_integrator_id" placeholder="Ej. 789" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
-                                <field name="mercantil_secret_key" password="True" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
+                                <field name="mercantil_secret_key" widget="password_toggle" required="%(bestpay_mer.payment_provider_mercantil)d in allowed_provider_ids and is_api_client"/>
                             </group>
                             <group>
                                 <field name="mercantil_payment_url" placeholder="https://getway.mercantilbanco.com/..."/>

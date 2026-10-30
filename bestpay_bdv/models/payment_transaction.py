@@ -548,7 +548,6 @@ class PaymentTransactionBDV(models.Model):
                 
             self.write({
                 'bdv_c2p_status': 'error',
-                'state': 'error',
                 'state_message': data.get('message', 'Error desconocido en el proceso de cobro')
             })
             return {'success': False, 'message': data.get('message')}
@@ -597,6 +596,33 @@ class PaymentTransactionBDV(models.Model):
     # TODO [MIGRACIÓN FASE 7]: Mover toda esta lógica al módulo base 'bestpay'
     # para que sea reutilizada por Mercantil. Al migrar, estos métodos deben
     # vivir en 'bestpay/models/payment_transaction.py'.
+    def _bestpay_schedule_unpaid_notification(self):
+        """Programa el aviso 'payment.expired' para el cron de webhooks (sin envío síncrono).
+
+        No se envía en el acto porque este método se ejecuta desde el cron de
+        expiración: un timeout por transacción retrasaría todo el barrido.
+        """
+        if self.provider_id.code != 'bdv':
+            return super()._bestpay_schedule_unpaid_notification()
+
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_active:
+            _logger.info(
+                "[BESTPAY WEBHOOK] TX %s: aviso de vencimiento omitido "
+                "(webhook no configurado o desactivado).", self.id
+            )
+            return False
+
+        self.write({
+            'bestpay_webhook_event_id': f"evt_{secrets.token_urlsafe(24)}",
+            'bestpay_webhook_state': 'pending',
+            'bestpay_webhook_attempts': 0,
+            'bestpay_webhook_next_retry': False,
+            'bestpay_webhook_last_error': False,
+        })
+        _logger.info("[BESTPAY WEBHOOK] TX %s: aviso de link vencido programado.", self.id)
+        return True
+
     def _bestpay_trigger_webhook_3ro(self):
         """
         Dispara el webhook al tercero. Intenta envío inmediato; si falla, lo deja para el cron.
@@ -608,8 +634,9 @@ class PaymentTransactionBDV(models.Model):
             _logger.info("[BESTPAY WEBHOOK] TX %s: no configurado o desactivado.", self.id)
             return
         
-        # Generar event_id si no existe
-        event_id = self.bestpay_webhook_event_id or f"evt_{secrets.token_urlsafe(24)}"
+        # Cada evento es independiente (pago, vencimiento, pago tardío): el event_id
+        # debe ser nuevo para que el tercero no lo descarte como duplicado.
+        event_id = f"evt_{secrets.token_urlsafe(24)}"
         self.write({
             'bestpay_webhook_event_id': event_id,
             'bestpay_webhook_state': 'pending',  # Temporal durante el intento
@@ -645,9 +672,9 @@ class PaymentTransactionBDV(models.Model):
             except (ValueError, AttributeError):
                 bank_data = {'bank_reference': self.bdv_referencia or False}
 
-        return {
+        payload = {
             'event_id': self.bestpay_webhook_event_id,
-            'event_type': 'payment.done',
+            'event_type': 'payment.expired' if self.state == 'no_pagado' else 'payment.done',
             'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
             'transaction': {
                 'uuid_hash': self.uuid_hash,
@@ -664,6 +691,16 @@ class PaymentTransactionBDV(models.Model):
             },
             'bank_data': bank_data,
         }
+
+        # El aviso de vencimiento explica al cliente por qué se cerró el link.
+        if self.state == 'no_pagado':
+            payload['reason'] = self.bestpay_unpaid_reason or ''
+            if self.create_date:
+                payload['expired_at'] = (
+                    self.create_date + timedelta(hours=self.BESTPAY_LINK_EXPIRATION_HOURS)
+                ).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        return payload
 
     @api.model
     def _bestpay_process_pending_webhooks(self):

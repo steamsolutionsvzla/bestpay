@@ -35,6 +35,11 @@
                                 <field name="bestpay_flow_type" readonly="1"/>
                             </group>
                         </group>
+
+                        <group string="Estado y Motivos" name="state_reasons_group">
+                            <field name="bestpay_unpaid_reason" readonly="1" invisible="not bestpay_unpaid_reason"/>
+                            <field name="bestpay_cancel_reason" readonly="1" invisible="not bestpay_cancel_reason"/>
+                        </group>
                         
                         <group name="api_logs_group">
                             <group string="Logs de comunicación con el cliente" name="technical_logs">

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import http, fields
 from odoo.http import request
-from datetime import timedelta
 import json
 import logging
 import base64
@@ -11,8 +10,6 @@ _logger = logging.getLogger(__name__)
 
 
 class BestPayApiController(http.Controller):
-
-    LINK_EXPIRATION_HOURS = 24  # Regla de negocio: los links de pago vencen a las 24h
 
     def _bestpay_normalize_payment_details(self, payment_details):
         if not isinstance(payment_details, dict):
@@ -201,7 +198,16 @@ class BestPayApiController(http.Controller):
                 return encrypt_payload(response, partner.bestpay_encryption_key)
 
             # --- NUEVO: VALIDACIÓN DEFENSIVA PARA EVITAR EL ERROR DE FECHA ---
-            if not transaccion_existente.create_date:
+            # Una transacción 'no_pagado' ya tiene el link cerrado: nunca se reutiliza,
+            # aunque por algún motivo no hayan pasado las 48h. Se emite una nueva.
+            if not transaccion_existente:
+                pass  # No hay transacción previa: se crea una nueva más abajo.
+            elif transaccion_existente.state == 'no_pagado':
+                _logger.info(
+                    "[API] Transacción %s está No pagada, se emite una nueva (external_reference=%s)",
+                    transaccion_existente.reference, external_reference
+                )
+            elif not transaccion_existente.create_date:
                 _logger.warning(
                     "[API] Transacción ID=%s (Ref: %s) encontrada sin fecha de creación (corrupta). Se cancela para permitir reintento.",
                     transaccion_existente.id, external_reference
@@ -211,9 +217,9 @@ class BestPayApiController(http.Controller):
                     'state_message': 'Cancelada: fecha de creación inválida/corrupta.',
                 })
             else:
-                # --- LÓGICA ORIGINAL (Solo se ejecuta si la fecha es válida) ---
-                limite_expiracion = fields.Datetime.now() - timedelta(hours=self.LINK_EXPIRATION_HOURS)
-                if transaccion_existente.create_date >= limite_expiracion:
+                # --- LÓGICA DE EXPIRACIÓN DEL LINK ---
+                # El vencimiento se calcula con create_date + 48h (ver modelo).
+                if not transaccion_existente._bestpay_is_link_expired():
                     response = self._bestpay_standard_response(
                         tx=transaccion_existente,
                         status='success',
@@ -226,12 +232,9 @@ class BestPayApiController(http.Controller):
                     from ..lib.crypto_utils import encrypt_payload
                     return encrypt_payload(response, partner.bestpay_encryption_key)
 
-                transaccion_existente.write({
-                    'state': 'cancel',
-                    'state_message': f'Cancelada automáticamente: link expirado ({self.LINK_EXPIRATION_HOURS}h) sin completar el pago.',
-                })
+                transaccion_existente._bestpay_mark_as_unpaid()
                 _logger.info(
-                    "[API] Transacción %s expirada, cancelada automáticamente para permitir reintento (external_reference=%s)",
+                    "[API] Transacción %s expirada, pasada a No pagado para permitir reintento (external_reference=%s)",
                     transaccion_existente.reference, external_reference
                 )
 
@@ -394,7 +397,13 @@ class BestPayApiController(http.Controller):
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
 
-         # 8. Respuesta exitosa
+        # 8. El link ya fue emitido: la transacción queda pendiente de pago.
+        # 'pending' permite que el cron de expiración y los filtros de estado
+        # reflejen que el link está vigente esperando pago.
+        if tx.state == 'draft':
+            tx._set_pending(state_message='Link de pago emitido, pendiente de pago.')
+
+         # 9. Respuesta exitosa
         payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
         response = self._bestpay_standard_response(
             tx=tx,
@@ -421,3 +430,204 @@ class BestPayApiController(http.Controller):
             # Si falla el cifrado, retornamos en texto plano para no romper el flujo
         
         return response
+
+    def _bestpay_auth_and_decrypt(self):
+        """Autenticación, validación de partner y descifrado común para APIs BestPay."""
+        # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO
+        is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
+        if not is_encrypted:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Payload debe estar cifrado con AES-256-GCM. Agregar header X-BestPay-Encrypted: true',
+                transaction_status='error'
+            )
+
+        # 2. VALIDAR CREDENCIALES M2M
+        auth_header = request.httprequest.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Autenticación requerida. Use Basic Auth con Client ID y Client Secret.',
+                transaction_status='error'
+            )
+
+        try:
+            encoded_token = auth_header[6:].strip()
+            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
+            if ':' not in decoded_credentials:
+                raise ValueError('Formato inválido')
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Credenciales Basic malformadas.',
+                transaction_status='error'
+            )
+
+        if not request.db:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Base de datos no especificada en la petición.',
+                transaction_status='error'
+            )
+
+        partner = request.env['res.partner'].sudo().search([
+            ('is_api_client', '=', True),
+            ('bestpay_basic_token', '=', encoded_token),
+        ], limit=1)
+
+        if not partner:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Credenciales inválidas o cliente no autorizado.',
+                transaction_status='error'
+            )
+
+        # 3. DESCIFRAR
+        try:
+            from ..lib.crypto_utils import decrypt_payload
+            encrypted_data = request.httprequest.get_json(silent=True) or {}
+            if not encrypted_data and hasattr(request, 'get_json'):
+                try:
+                    encrypted_data = request.get_json(force=True, silent=True) or {}
+                except Exception:
+                    encrypted_data = {}
+            if not encrypted_data:
+                encrypted_data = kwargs if kwargs else {}
+            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
+            return (partner, decrypted_data), None
+        except Exception as e:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message=f'Error descifrando payload: {str(e)}',
+                transaction_status='error'
+            )
+
+    @http.route('/api/v1/transactions/search', type='json', auth='none', methods=['POST'], csrf=False)
+    def search_transactions_api(self, **kwargs):
+        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        if error_resp is not None:
+            return error_resp
+        partner, decrypted_data = auth_result
+        
+        try:
+            from ..services.transaction_service import BestPayTransactionQueryService
+            service = BestPayTransactionQueryService(request.env)
+            result = service.search_transactions(partner, decrypted_data or {})
+        except ValueError as ve:
+            resp = self._bestpay_standard_response(
+                status='error',
+                message=str(ve),
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        except Exception as e:
+            _logger.error("[API][SEARCH] Error: %s", e)
+            resp = self._bestpay_standard_response(
+                status='error',
+                message='Error interno al consultar transacciones.',
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            return encrypt_payload(result, partner.bestpay_encryption_key)
+        except Exception as e:
+            _logger.error("[API][SEARCH] Error cifrando respuesta: %s", e)
+            return result
+
+    @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
+    @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
+    def get_transaction_api(self, **kwargs):
+        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        if error_resp is not None:
+            return error_resp
+        partner, decrypted_data = auth_result
+        
+        try:
+            from ..services.transaction_service import BestPayTransactionQueryService
+            service = BestPayTransactionQueryService(request.env)
+            external_reference = decrypted_data.get('external_reference') if isinstance(decrypted_data, dict) else None
+            result = service.get_transaction(partner, external_reference)
+        except ValueError as ve:
+            resp = self._bestpay_standard_response(
+                status='error',
+                message=str(ve),
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        except Exception as e:
+            _logger.error("[API][GET] Error: %s", e)
+            resp = self._bestpay_standard_response(
+                status='error',
+                message='Error interno al consultar transacción.',
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            return encrypt_payload(result, partner.bestpay_encryption_key)
+        except Exception as e:
+            _logger.error("[API][GET] Error cifrando respuesta: %s", e)
+            return result
+
+    @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
+    def cancel_transaction_api(self, **kwargs):
+        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        if error_resp is not None:
+            return error_resp
+        partner, decrypted_data = auth_result
+        
+        try:
+            from ..services.transaction_service import BestPayTransactionQueryService
+            service = BestPayTransactionQueryService(request.env)
+            external_reference = decrypted_data.get('external_reference') if isinstance(decrypted_data, dict) else None
+            reason = decrypted_data.get('reason') if isinstance(decrypted_data, dict) else None
+            result = service.cancel_transaction(partner, external_reference, reason)
+        except ValueError as ve:
+            resp = self._bestpay_standard_response(
+                status='error',
+                message=str(ve),
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        except Exception as e:
+            _logger.error("[API][CANCEL] Error: %s", e)
+            resp = self._bestpay_standard_response(
+                status='error',
+                message='Error interno al cancelar transacción.',
+                transaction_status='error'
+            )
+            try:
+                from ..lib.crypto_utils import encrypt_payload
+                return encrypt_payload(resp, partner.bestpay_encryption_key)
+            except Exception:
+                return resp
+        
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            return encrypt_payload(result, partner.bestpay_encryption_key)
+        except Exception as e:
+            _logger.error("[API][CANCEL] Error cifranda respuesta: %s", e)
+            return result
