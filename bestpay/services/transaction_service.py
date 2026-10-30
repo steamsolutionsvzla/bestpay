@@ -14,7 +14,7 @@ class BestPayTransactionQueryService(object):
     el controlador limpio y permitir extensibilidad por satélites.
     """
 
-    ALLOWED_STATES = ['draft', 'pending', 'done', 'cancel', 'error']
+    ALLOWED_STATES = ['draft', 'pending', 'done', 'cancel', 'error', 'no_pagado']
     DEFAULT_LIMIT = 25
     MAX_LIMIT = 75
     MAX_DATE_RANGE_DAYS = 31
@@ -175,12 +175,13 @@ class BestPayTransactionQueryService(object):
         """Serializa transacción con proyección mínima (DTO)."""
         payment_link = False
         try:
-            # Intentar obtener payment_link
-            if hasattr(tx, 'payment_link') and tx.payment_link:
+            # Link público de la transacción. Mercantil no usa 'payment_link':
+            # guarda el link de BestPay en 'payment_link_client_mer'. El link del
+            # banco ('payment_link_bank_mer') es interno y nunca se expone.
+            if getattr(tx, 'payment_link', False):
                 payment_link = tx.payment_link
-            else:
-                # Usar método del controlador si existe
-                pass
+            elif getattr(tx, 'payment_link_client_mer', False):
+                payment_link = tx.payment_link_client_mer
         except Exception:
             pass
         
