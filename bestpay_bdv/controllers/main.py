@@ -23,10 +23,10 @@ class BestpayBDVController(http.Controller):
         if transaction.state in ('cancel', 'error'):
             return 'Esta transacción ya no está disponible. Solicita un nuevo link de pago.'
         if transaction.state == 'no_pagado':
-            return 'Este link de pago venció. Solicita uno nuevo desde Koole.'
+            return 'Este link de pago venció. Solicita un nuevo link de pago.'
         if transaction.state in ('draft', 'pending') and transaction._bestpay_is_link_expired():
             transaction._bestpay_mark_as_unpaid()
-            return 'Este link de pago venció. Solicita uno nuevo desde Koole.'
+            return 'Este link de pago venció. Solicita un nuevo link de pago.'
         if transaction.bdv_c2p_end_to_end_id:
             return 'Esta transacción ya fue procesada.'
         return False
@@ -51,7 +51,7 @@ class BestpayBDVController(http.Controller):
         return request.render('bestpay_bdv.bdv_checkout_result', {
             'transaction': transaction,
             'status': 'expired',
-            'message': 'Este link de pago venció. Por favor solicita uno nuevo desde Koole.'
+            'message': 'Este link de pago venció. Por favor solicita un nuevo link de pago.'
         })
 
     # =====================================================
@@ -80,14 +80,14 @@ class BestpayBDVController(http.Controller):
             return request.render('bestpay_bdv.bdv_checkout_result', {
                 'transaction': transaction,
                 'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
             })
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
             return request.render('bestpay_bdv.bdv_checkout_result', {
                 'transaction': transaction,
                 'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
             })
 
         # Link vencido ('no_pagado' o más de 48h desde su creación): no se puede pagar.
@@ -194,14 +194,14 @@ class BestpayBDVController(http.Controller):
             return request.render('bestpay_bdv.bdv_checkout_result', {
                 'transaction': transaction,
                 'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
             })
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
             return request.render('bestpay_bdv.bdv_checkout_result', {
                 'transaction': transaction,
                 'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita uno nuevo desde Koole.'
+                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
             })
 
         # Bloqueo del POST: evita pagar con el HTML ya abierto de un link vencido.
