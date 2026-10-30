@@ -21,6 +21,14 @@
         'views/res_currency_views.xml', 
     ],
 
+    'assets': {
+        'web.assets_backend': [
+            'bestpay/static/src/css/password_toggle_field.css',
+            'bestpay/static/src/js/password_toggle_field.js',
+            'bestpay/static/src/xml/password_toggle_field.xml',
+        ],
+    },
+
     'installable': True,
     'application': True,
     'auto_install': False,

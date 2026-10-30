@@ -19,18 +19,7 @@
         'views/movimiento_wizard_views.xml',
         'views/payment_transaction_views.xml',
     ],
-        'assets': {
-        'web.assets_frontend': [
-            'bestpay_bdv/static/src/js/bdv_checkout.js',
-        ],
-        'web.assets_backend': [
-            'bestpay_bdv/static/src/css/password_toggle_field.css',
-            'bestpay_bdv/static/src/js/password_toggle_field.js',
-            'bestpay_bdv/static/src/xml/password_toggle_field.xml',
-        ],
-    },
-
-    'installable': True,
+        'installable': True,
     'application': False,
     'auto_install': False,
     'license': 'LGPL-3',

@@ -4,7 +4,7 @@ import { CharField } from "@web/views/fields/char/char_field";
 import { useState } from "@odoo/owl";
 
 export class PasswordToggleField extends CharField {
-    static template = "bestpay_bdv.PasswordToggleField";
+    static template = "bestpay.PasswordToggleField";
 
     setup() {
         super.setup();
