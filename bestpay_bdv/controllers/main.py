@@ -12,6 +12,25 @@ _logger = logging.getLogger(__name__)
 
 class BestpayBDVController(http.Controller):
 
+    def _bestpay_c2p_unavailable_reason(self, transaction):
+        """Motivo por el que C2P no puede operar sobre la transacción, o False si está vigente.
+
+        C2P debita dinero real de la cuenta del cliente: nunca debe ejecutarse sobre
+        una transacción cerrada (pagada, cancelada, con error o vencida) ni dos veces.
+        """
+        if transaction.state == 'done':
+            return 'Esta transacción ya fue pagada exitosamente.'
+        if transaction.state in ('cancel', 'error'):
+            return 'Esta transacción ya no está disponible. Solicita un nuevo link de pago.'
+        if transaction.state == 'no_pagado':
+            return 'Este link de pago venció. Solicita uno nuevo desde Koole.'
+        if transaction.state in ('draft', 'pending') and transaction._bestpay_is_link_expired():
+            transaction._bestpay_mark_as_unpaid()
+            return 'Este link de pago venció. Solicita uno nuevo desde Koole.'
+        if transaction.bdv_c2p_end_to_end_id:
+            return 'Esta transacción ya fue procesada.'
+        return False
+
     def _bestpay_link_is_unavailable(self, transaction):
         """Un link no es pagable si ya venció o si la transacción no está vigente.
 
@@ -556,6 +575,15 @@ class BestpayBDVController(http.Controller):
         if not transaction.exists() or transaction.provider_id.code != 'bdv':
             return {'success': False, 'error': 'Transacción no válida.'}
 
+        # Guardas de estado: no se pide OTP para transacciones cerradas o vencidas.
+        unavailable_reason = self._bestpay_c2p_unavailable_reason(transaction)
+        if unavailable_reason:
+            _logger.info(
+                "[BDV C2P OTP] Bloqueado para Tx %s (estado: %s): %s",
+                transaction.reference, transaction.state, unavailable_reason
+            )
+            return {'success': False, 'error': unavailable_reason}
+
         try:
             # 1. Guardamos los datos iniciales en la transacción
             transaction.write({
@@ -591,14 +619,34 @@ class BestpayBDVController(http.Controller):
         if not uuid_hash or not otp:
             return {'success': False, 'error': 'Faltan datos obligatorios (uuid_hash u OTP).'}
 
+        otp_clean = str(otp).strip()
+        if not otp_clean.isdigit() or not (4 <= len(otp_clean) <= 10):
+            return {'success': False, 'error': 'El código OTP no es válido.'}
+
         transaction = request.env['payment.transaction'].sudo().search([('uuid_hash', '=', uuid_hash)], limit=1)
-        if not transaction.exists():
+        if not transaction.exists() or transaction.provider_id.code != 'bdv':
             return {'success': False, 'error': 'Transacción no válida.'}
+
+        # Guardas de estado: nunca cobrar dos veces ni sobre links cerrados/vencidos.
+        unavailable_reason = self._bestpay_c2p_unavailable_reason(transaction)
+        if unavailable_reason:
+            _logger.info(
+                "[BDV C2P Process] Bloqueado para Tx %s (estado: %s): %s",
+                transaction.reference, transaction.state, unavailable_reason
+            )
+            return {'success': False, 'error': unavailable_reason}
+
+        # El cobro solo se permite si el OTP fue solicitado previamente.
+        if transaction.bdv_c2p_status in (False, 'pending'):
+            return {
+                'success': False,
+                'error': 'Primero debes solicitar el código OTP para esta transacción.'
+            }
 
         try:
             # 1. Guardamos el OTP en la transacción
             transaction.write({
-                'bdv_c2p_otp': otp,
+                'bdv_c2p_otp': otp_clean,
                 'bdv_c2p_status': 'processing'
             })
 
@@ -617,8 +665,11 @@ class BestpayBDVController(http.Controller):
                     'end_to_end_id': transaction.bdv_c2p_end_to_end_id
                 }
             else:
-                # Si falla, intentamos anular automáticamente para liberar al cliente (buena práctica)
-                transaction.bdv_c2p_annul()
+                # El banco rechazó el cobro (por ejemplo, OTP incorrecto). No se anula
+                # nada porque no se movió dinero; la transacción queda 'pending' para
+                # que el cliente pueda reintentar con un OTP válido.
+                if transaction.bdv_c2p_end_to_end_id:
+                    transaction.bdv_c2p_annul()
                 return {
                     'success': False,
                     'error': result.get('message', 'El banco rechazó el pago.')
@@ -628,6 +679,14 @@ class BestpayBDVController(http.Controller):
             return {'success': False, 'error': str(e)}
         except Exception as e:
             _logger.error(f"[BDV C2P Process] Error inesperado: {str(e)}", exc_info=True)
+            # Liberar el flujo para que un fallo técnico no bloquee el reintento.
+            try:
+                transaction.write({
+                    'bdv_c2p_status': 'error',
+                    'state_message': 'Error técnico procesando el cobro C2P.',
+                })
+            except Exception:
+                pass
             return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}
     
         # =====================================================

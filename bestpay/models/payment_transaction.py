@@ -137,6 +137,7 @@ class PaymentTransaction(models.Model):
         reason = reason or (
             f'Link expirado por tiempo ({hours}h) sin completar el pago.'
         )
+        was_already_unpaid = self.state == 'no_pagado'
         self.write({
             'state': 'no_pagado',
             'bestpay_unpaid_reason': reason,
@@ -146,7 +147,26 @@ class PaymentTransaction(models.Model):
             "[BESTPAY] TX %s (%s) pasada a No pagado: %s",
             self.id, self.reference, reason
         )
+        # Aviso al cliente API: cada banco lo programa con su propio sistema de
+        # webhooks. Solo la primera transición; nunca debe bloquear el cambio de estado.
+        if not was_already_unpaid:
+            try:
+                self._bestpay_schedule_unpaid_notification()
+            except Exception as e:
+                _logger.error(
+                    "[BESTPAY] TX %s: no se pudo programar el aviso de link vencido: %s",
+                    self.id, e
+                )
         return True
+
+    def _bestpay_schedule_unpaid_notification(self):
+        """Hook para avisar al cliente API que el link venció.
+
+        El módulo base no conoce el sistema de webhooks de cada banco; los módulos
+        de BDV y Mercantil lo implementan y llaman a `super()` para que ambos
+        convivan sin pisarse.
+        """
+        return False
 
     amount_ves = fields.Monetary(
         string="Importe VES",

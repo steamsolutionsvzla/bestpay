@@ -57,6 +57,20 @@ def _decrypt_with_available_keys(env, encrypted_data: str):
 
 class BestPayWebhookController(http.Controller):
 
+    def _bestpay_mer_link_is_expired(self, tx):
+        """Indica si el link de pago de Mercantil ya no puede usarse.
+
+        Una transacción 'no_pagado' siempre está cerrada. Para 'draft'/'pending'
+        se aplica la regla general de 48h desde la creación y, si ya venció, se
+        deja marcada como 'no_pagado' (sin esperar al cron).
+        """
+        if tx.state == 'no_pagado':
+            return True
+        if tx.state in ('draft', 'pending') and tx._bestpay_is_link_expired():
+            tx._bestpay_mark_as_unpaid()
+            return True
+        return False
+
     def _json_response(self, obj: Dict[str, Any], status: int):
             return request.make_response(json.dumps(obj), status=status)
     
@@ -126,11 +140,31 @@ class BestPayWebhookController(http.Controller):
         if tx.state == 'done':
             return request.make_response("Error: Esta transacción ya fue pagada exitosamente.", status=400)
 
+        # 3. No reutilizar links de transacciones ya cerradas (canceladas o con error).
+        # Mercantil solo escribe 'done'; estos estados vienen del cliente API o del sistema,
+        # por lo que generar un link bancario nuevo aquí solo produciría un pago huérfano.
+        if tx.state in ('cancel', 'error'):
+            _logger.info(
+                "[BESTPAY MERCANTIL API] Link no disponible para Tx %s (estado: %s).",
+                tx.reference, tx.state
+            )
+            return request.make_response(
+                "Error: Esta transacción ya no está disponible. Solicita un nuevo link de pago.",
+                status=400
+            )
+
+        # 4. Link vencido: no se permite iniciar un pago nuevo ni generar otro link bancario.
+        if self._bestpay_mer_link_is_expired(tx):
+            return request.make_response(
+                "Error: Este link de pago venció. Solicita uno nuevo desde Koole.",
+                status=400
+            )
+
         partner = tx.bestpay_client_id
         if not partner or not partner.mercantil_payment_url or not partner.mercantil_merchant_id:
             return request.make_response("Error interno: Configuración de pasarela incompleta.", status=500)
 
-        # 3. Reutilizar el link vigente o generar uno nuevo "Justo a Tiempo"
+        # 5. Reutilizar el link vigente o generar uno nuevo "Justo a Tiempo"
         try:
             # Solo regenera si no existe, expiró (>1 día) o el monto VES cambió.
             custom_link = tx._bestpay_get_or_generate_mer_link()
@@ -235,8 +269,16 @@ class BestPayWebhookController(http.Controller):
                 'mercantil_paid_by_manual_search': False,
             })
 
-            # 6. Marcar Transacción como Exitosa
-            tx._set_done()
+            # 6. Marcar Transacción como Exitosa.
+            # Se permite 'no_pagado' como origen: si el cliente pagó antes de que el
+            # link venciera, el banco puede confirmarlo después. El dinero ya está en
+            # la cuenta del comercio y el estado debe reflejarlo.
+            if tx.state == 'no_pagado':
+                _logger.warning(
+                    "[BESTPAY MERCANTIL WEBHOOK] Pago tardío confirmado para Tx %s "
+                    "(marcada como No pagado). Se pasa a Done.", tx.reference
+                )
+            tx._set_done(extra_allowed_states=('no_pagado',))
             _logger.info(f"[BESTPAY MERCANTIL WEBHOOK] ✓ Transacción {tx.reference} (ID: {tx.id}) procesada como DONE.")
 
             # 7. Notificar al Cliente API (Tercero)

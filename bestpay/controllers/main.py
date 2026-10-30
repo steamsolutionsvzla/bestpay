@@ -198,7 +198,16 @@ class BestPayApiController(http.Controller):
                 return encrypt_payload(response, partner.bestpay_encryption_key)
 
             # --- NUEVO: VALIDACIÓN DEFENSIVA PARA EVITAR EL ERROR DE FECHA ---
-            if not transaccion_existente.create_date:
+            # Una transacción 'no_pagado' ya tiene el link cerrado: nunca se reutiliza,
+            # aunque por algún motivo no hayan pasado las 48h. Se emite una nueva.
+            if not transaccion_existente:
+                pass  # No hay transacción previa: se crea una nueva más abajo.
+            elif transaccion_existente.state == 'no_pagado':
+                _logger.info(
+                    "[API] Transacción %s está No pagada, se emite una nueva (external_reference=%s)",
+                    transaccion_existente.reference, external_reference
+                )
+            elif not transaccion_existente.create_date:
                 _logger.warning(
                     "[API] Transacción ID=%s (Ref: %s) encontrada sin fecha de creación (corrupta). Se cancela para permitir reintento.",
                     transaccion_existente.id, external_reference

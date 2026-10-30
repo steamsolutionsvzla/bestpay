@@ -388,6 +388,41 @@ class PaymentTransaction(models.Model):
             },
         }
 
+    def _webhook_3ro_event_name(self):
+        """Nombre del evento según el estado (se mantiene el histórico de pagos)."""
+        if self.state == 'done':
+            return 'payment.completed'
+        if self.state == 'no_pagado':
+            return 'payment.expired'
+        return f"payment.{self.state}"
+
+    def _bestpay_schedule_unpaid_notification(self):
+        """Programa el aviso 'payment.expired' para el cron de reintentos de Mercantil.
+
+        Se usa el sistema de webhooks propio de Mercantil (webhook_3ro_*), que ya
+        tiene backoff y cron cada 5 minutos.
+        """
+        if self.provider_id.code != 'mer':
+            return super()._bestpay_schedule_unpaid_notification()
+
+        partner = self.bestpay_client_id or self.partner_id
+        if not partner or not partner.webhook_url_3ro or not partner.bestpay_webhook_active:
+            _logger.info(
+                "[WEBHOOK TERCERO] Tx %s: aviso de vencimiento omitido "
+                "(webhook no configurado o desactivado).", self.reference
+            )
+            return False
+
+        self.write({
+            'webhook_3ro_state': 'pending',
+            'webhook_3ro_attempts': 0,
+            'webhook_3ro_next_retry': fields.Datetime.now(),
+        })
+        _logger.info(
+            "[WEBHOOK TERCERO] Tx %s: aviso de link vencido programado.", self.reference
+        )
+        return True
+
     @api.model
     def _webhook_3ro_is_retryable(self, status_code):
         """
@@ -433,7 +468,7 @@ class PaymentTransaction(models.Model):
 
         # Construir el payload a enviar
         payload = {
-            "event": "payment.completed" if self.state == 'done' else f"payment.{self.state}",
+            "event": self._webhook_3ro_event_name(),
             "external_reference": self.external_reference,
             "odoo_reference": self.reference,
             "transaction_id": self.id,
@@ -445,6 +480,14 @@ class PaymentTransaction(models.Model):
             "exchange_rate": self.exchange_rate_bcv,
             # "bank_reference": self.acquirer_reference or '',
         }
+
+        # El aviso de vencimiento explica al cliente por qué se cerró el link.
+        if self.state == 'no_pagado':
+            payload["reason"] = self.bestpay_unpaid_reason or ''
+            if self.create_date:
+                payload["expired_at"] = (
+                    self.create_date + timedelta(hours=self.BESTPAY_LINK_EXPIRATION_HOURS)
+                ).strftime('%Y-%m-%dT%H:%M:%SZ')
 
         payload_json = json.dumps(payload, ensure_ascii=False, indent=4)
         _logger.info(f"[WEBHOOK TERCERO] Intento #{attempts} hacia {webhook_url} para transacción {self.reference}")

@@ -199,6 +199,10 @@ class BestPayTransactionQueryService(object):
             'flow_type': getattr(tx, 'bestpay_flow_type', False),
             'create_date': fields.Datetime.to_string(tx.create_date) if tx.create_date else False,
             'write_date': fields.Datetime.to_string(tx.write_date) if tx.write_date else False,
+            # Motivos visibles para el cliente: por qué se venció el link o por qué
+            # canceló. Nunca exponen datos internos ni credenciales.
+            'unpaid_reason': tx.bestpay_unpaid_reason or False,
+            'cancel_reason': tx.bestpay_cancel_reason or False,
         }
         
         # Añadir payment_details normalizados si es necesario (solo campos seguros)
