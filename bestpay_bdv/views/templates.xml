@@ -338,12 +338,24 @@
                                                 <label class="form-label">Banco Emisor</label>
                                                 <select class="form-select" name="banco" required="1">
                                                     <option value="0102">0102 - Banco de Venezuela</option>
-                                                    <option value="0105">0105 - Mercantil</option>
-                                                    <option value="0108">0108 - Provincial</option>
                                                     <option value="0134">0134 - Banesco</option>
-                                                    <option value="0104">0104 - Venezolano de Crédito</option>
+                                                    <option value="0105">0105 - Mercantil</option>
+                                                    <option value="0108">0108 - Provincial (BBVA)</option>
+                                                    <option value="0114">0114 - Bancaribe</option>
+                                                    <option value="0191">0191 - Banco Nacional de Crédito (BNC)</option>
+                                                    <option value="0175">0175 - Banco Digital de los Trabajadores (BDT)</option>
+                                                    <option value="0163">0163 - Banco del Tesoro</option>
+                                                    <option value="0174">0174 - Banplus</option>
                                                     <option value="0172">0172 - Bancamiga</option>
-                                                    <option value="0175">0175 - Banco del Tesoro</option>
+                                                    <option value="0151">0151 - Banco Fondo Común (BFC)</option>
+                                                    <option value="0115">0115 - Banco Exterior</option>
+                                                    <option value="0137">0137 - Banco Sofitasa</option>
+                                                    <option value="0104">0104 - Venezolano de Crédito</option>
+                                                    <option value="0171">0171 - Banco Activo</option>
+                                                    <option value="0138">0138 - Banco Plaza</option>
+                                                    <option value="0156">0156 - 100% Banco</option>
+                                                    <option value="0157">0157 - DelSur Banco Universal</option>
+                                                    <option value="0169">0169 - Mi Banco (R4)</option>
                                                     <option value="0128">0128 - Banco Caroní</option>
                                                 </select>
                                             </div>
@@ -743,7 +755,7 @@ function bpConsultarEstadoNotificacion() {
 
                                         <!-- DATOS DEL PAGADOR (solo C2P y solo en pago exitoso) -->
                                         <t t-if="transaction.bdv_c2p_customer_document_id and status == 'success'">
-                                            <t t-set="c2p_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
+                                            <t t-set="c2p_banks" t-value="{'0102':'Banco de Venezuela','0134':'Banesco','0105':'Mercantil','0108':'Provincial (BBVA)','0114':'Bancaribe','0191':'Banco Nacional de Crédito (BNC)','0175':'Banco Digital de los Trabajadores (BDT)','0163':'Banco del Tesoro','0174':'Banplus','0172':'Bancamiga','0151':'Banco Fondo Común (BFC)','0115':'Banco Exterior','0137':'Banco Sofitasa','0104':'Venezolano de Crédito','0171':'Banco Activo','0138':'Banco Plaza','0156':'100% Banco','0157':'DelSur Banco Universal','0169':'Mi Banco (R4)','0128':'Banco Caroní'}"/>
                                             <div class="bg-light rounded p-3 mb-4 text-start">
                                                 <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
                                                 <div class="row mb-1"><div class="col-5"><strong>Cédula:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_c2p_customer_document_id"/></div></div>
@@ -756,7 +768,7 @@ function bpConsultarEstadoNotificacion() {
 
                                         <!-- DATOS DEL PAGADOR (solo Pago Móvil y solo en pago exitoso) -->
                                         <t t-if="transaction.bdv_cedula_pagador and status == 'success'">
-                                            <t t-set="pm_banks" t-value="{'0102':'Banco de Venezuela','0105':'Mercantil','0108':'Provincial','0134':'Banesco','0104':'Venezolano de Crédito','0172':'Bancamiga','0175':'Banco del Tesoro','0128':'Banco Caroní'}"/>
+                                            <t t-set="pm_banks" t-value="{'0102':'Banco de Venezuela','0134':'Banesco','0105':'Mercantil','0108':'Provincial (BBVA)','0114':'Bancaribe','0191':'Banco Nacional de Crédito (BNC)','0175':'Banco Digital de los Trabajadores (BDT)','0163':'Banco del Tesoro','0174':'Banplus','0172':'Bancamiga','0151':'Banco Fondo Común (BFC)','0115':'Banco Exterior','0137':'Banco Sofitasa','0104':'Venezolano de Crédito','0171':'Banco Activo','0138':'Banco Plaza','0156':'100% Banco','0157':'DelSur Banco Universal','0169':'Mi Banco (R4)','0128':'Banco Caroní'}"/>
                                             <div class="bg-light rounded p-3 mb-4 text-start">
                                                 <p class="mb-2 small text-muted text-uppercase" style="letter-spacing:1px;">Datos del Pagador</p>
                                                 <div class="row mb-1"><div class="col-5"><strong>Cédula:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_cedula_pagador"/></div></div>
