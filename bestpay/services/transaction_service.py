@@ -310,7 +310,11 @@ class BestPayTransactionQueryService(object):
         Tx = self.env['payment.transaction'].sudo()
         tx = Tx.search(domain, limit=1, order='create_date desc, id desc')
         if not tx:
-            raise ValueError("Transacción no encontrada.")
+            return {
+                'status': 'error',
+                'message': 'Transacción no encontrada.',
+                'transaction_status': 'not_found',
+            }
         
         # Si ya está cancelada, idempotente
         if tx.state == 'cancel':
