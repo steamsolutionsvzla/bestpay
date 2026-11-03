@@ -41,6 +41,36 @@ class BestPayApiController(http.Controller):
 
         return False
 
+    @staticmethod
+    def _bestpay_key_is_usable(encryption_key):
+        """Valida que la clave sea base64 de 32 bytes (AES-256)."""
+        if not encryption_key:
+            return False
+        try:
+            return len(base64.b64decode(encryption_key, validate=True)) == 32
+        except Exception:
+            return False
+
+    def _bestpay_encrypt_or_error(self, payload, partner):
+        """Cifra la respuesta de la API. Si no se puede, devuelve un error.
+
+        Nunca devuelve un 'success' en texto plano: eso rompe el contrato de
+        seguridad y el cliente no puede verificarlo. El error sí puede ir plano
+        (el cliente ya lo acepta así) y el reintento reutiliza la transacción.
+        """
+        try:
+            from ..lib.crypto_utils import encrypt_payload
+            return encrypt_payload(payload, partner.bestpay_encryption_key)
+        except Exception as e:
+            _logger.error(
+                "[API] Error cifrando respuesta: %s. Se devuelve error al cliente.", e
+            )
+            return self._bestpay_standard_response(
+                status='error',
+                message='No se pudo cifrar la respuesta. Reintenta con la misma referencia.',
+                transaction_status='error',
+            )
+
     def _bestpay_standard_response(self, tx=None, status='success', message='', transaction_status=None,
                                   payment_details=None, payment_link=None):
         payload = self._bestpay_normalize_payment_details(payment_details or {})
@@ -136,6 +166,17 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
+        if not self._bestpay_key_is_usable(partner.bestpay_encryption_key):
+            _logger.error(
+                "[API] Cliente %s sin clave de cifrado válida. No se procesa la petición.",
+                partner.name,
+            )
+            return self._bestpay_standard_response(
+                status='error',
+                message='El cliente no tiene una clave de cifrado válida configurada. Contacta a BestPay.',
+                transaction_status='error'
+            )
+
         # ========================================================================
         # 3. DESCIFRAR EL PAYLOAD USANDO LA CLAVE DEL PARTNER
         # ========================================================================
@@ -194,8 +235,7 @@ class BestPayApiController(http.Controller):
                     payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
                 )
                 # CIFRAMOS ANTES DE RETORNAR
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(response, partner.bestpay_encryption_key)
+                return self._bestpay_encrypt_or_error(response, partner)
 
             # --- NUEVO: VALIDACIÓN DEFENSIVA PARA EVITAR EL ERROR DE FECHA ---
             # Una transacción 'no_pagado' ya tiene el link cerrado: nunca se reutiliza,
@@ -229,8 +269,7 @@ class BestPayApiController(http.Controller):
                         payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
                     )
                     # CIFRAMOS ANTES DE RETORNAR
-                    from ..lib.crypto_utils import encrypt_payload
-                    return encrypt_payload(response, partner.bestpay_encryption_key)
+                    return self._bestpay_encrypt_or_error(response, partner)
 
                 transaccion_existente._bestpay_mark_as_unpaid()
                 _logger.info(
@@ -420,16 +459,7 @@ class BestPayApiController(http.Controller):
         # ========================================================================
         # CIFRADO DE LA RESPUESTA (PATRÓN ESTANDARIZADO)
         # ========================================================================
-        try:
-            from ..lib.crypto_utils import encrypt_payload
-            # Ciframos el diccionario de respuesta antes de enviarlo por la red
-            response = encrypt_payload(response, partner.bestpay_encryption_key)
-            _logger.info("✅ [API] Respuesta cifrada exitosamente para tx: %s", tx.reference)
-        except Exception as e:
-            _logger.error("❌ [API] Error cifrando respuesta: %s. Retornando en texto plano.", str(e))
-            # Si falla el cifrado, retornamos en texto plano para no romper el flujo
-        
-        return response
+        return self._bestpay_encrypt_or_error(response, partner)
 
     def _bestpay_auth_and_decrypt(self):
         """Autenticación, validación de partner y descifrado común para APIs BestPay."""
@@ -482,6 +512,17 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
+        if not self._bestpay_key_is_usable(partner.bestpay_encryption_key):
+            _logger.error(
+                "[API] Cliente %s sin clave de cifrado válida. No se procesa la consulta.",
+                partner.name,
+            )
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='El cliente no tiene una clave de cifrado válida configurada. Contacta a BestPay.',
+                transaction_status='error'
+            )
+
         # 3. DESCIFRAR
         try:
             from ..lib.crypto_utils import decrypt_payload
@@ -519,11 +560,7 @@ class BestPayApiController(http.Controller):
                 message=str(ve),
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
+            return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][SEARCH] Error: %s", e)
             resp = self._bestpay_standard_response(
@@ -531,18 +568,9 @@ class BestPayApiController(http.Controller):
                 message='Error interno al consultar transacciones.',
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
-        
-        try:
-            from ..lib.crypto_utils import encrypt_payload
-            return encrypt_payload(result, partner.bestpay_encryption_key)
-        except Exception as e:
-            _logger.error("[API][SEARCH] Error cifrando respuesta: %s", e)
-            return result
+            return self._bestpay_encrypt_or_error(resp, partner)
+
+        return self._bestpay_encrypt_or_error(result, partner)
 
     @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
     @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
@@ -563,11 +591,7 @@ class BestPayApiController(http.Controller):
                 message=str(ve),
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
+            return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][GET] Error: %s", e)
             resp = self._bestpay_standard_response(
@@ -575,18 +599,9 @@ class BestPayApiController(http.Controller):
                 message='Error interno al consultar transacción.',
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
-        
-        try:
-            from ..lib.crypto_utils import encrypt_payload
-            return encrypt_payload(result, partner.bestpay_encryption_key)
-        except Exception as e:
-            _logger.error("[API][GET] Error cifrando respuesta: %s", e)
-            return result
+            return self._bestpay_encrypt_or_error(resp, partner)
+
+        return self._bestpay_encrypt_or_error(result, partner)
 
     @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
     def cancel_transaction_api(self, **kwargs):
@@ -607,11 +622,7 @@ class BestPayApiController(http.Controller):
                 message=str(ve),
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
+            return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][CANCEL] Error: %s", e)
             resp = self._bestpay_standard_response(
@@ -619,15 +630,6 @@ class BestPayApiController(http.Controller):
                 message='Error interno al cancelar transacción.',
                 transaction_status='error'
             )
-            try:
-                from ..lib.crypto_utils import encrypt_payload
-                return encrypt_payload(resp, partner.bestpay_encryption_key)
-            except Exception:
-                return resp
-        
-        try:
-            from ..lib.crypto_utils import encrypt_payload
-            return encrypt_payload(result, partner.bestpay_encryption_key)
-        except Exception as e:
-            _logger.error("[API][CANCEL] Error cifranda respuesta: %s", e)
-            return result
+            return self._bestpay_encrypt_or_error(resp, partner)
+
+        return self._bestpay_encrypt_or_error(result, partner)
