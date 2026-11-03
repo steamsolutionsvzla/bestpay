@@ -83,6 +83,24 @@ class ResPartner(models.Model):
                 vals['bestpay_encryption_key'] = generate_key()
         return super().create(vals_list)
 
+    def write(self, vals):
+        """Genera la clave si se activa 'Es Cliente BestPay' y aún no tiene una.
+
+        Solo genera cuando el campo está vacío: nunca pisa una clave existente
+        (el cliente podría estar usándola). El administrador debe comunicarla.
+        """
+        res = super().write(vals)
+        if vals.get('is_api_client'):
+            from ..lib.crypto_utils import generate_key
+            for partner in self:
+                if not partner.bestpay_encryption_key:
+                    partner.bestpay_encryption_key = generate_key()
+                    _logger.info(
+                        "[BESTPAY] Clave de cifrado generada al activar cliente API: %s",
+                        partner.name,
+                    )
+        return res
+
     def action_regenerate_encryption_key(self):
         """Botón para regenerar la clave de cifrado manualmente (Rotación)."""
         self.ensure_one()
@@ -444,14 +462,16 @@ class PaymentTransaction(models.Model):
                 _logger.error("[BESTPAY WEBHOOK] TX %s: Fallo al cifrar: %s", self.id, str(e))
                 return {'success': False, 'status_code': None, 'response': f'Error de cifrado: {str(e)}'}
         else:
-            # Fallback: texto plano (para transición o debugging)
-            body_to_send = json.dumps(payload_dict, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-            headers = {
-                'Content-Type': 'application/json; charset=utf-8',
-                'X-BestPay-Event-ID': event_id,
-                'User-Agent': 'BestPay-Webhook/1.0',
+            # Nunca se envía una notificación sin cifrar: se corta y se reporta.
+            _logger.error(
+                "[BESTPAY WEBHOOK] TX %s: cliente sin clave de cifrado configurada. "
+                "No se envía la notificación.", self.id
+            )
+            return {
+                'success': False,
+                'status_code': None,
+                'response': 'Cliente sin clave de cifrado configurada',
             }
-            _logger.warning("[BESTPAY WEBHOOK] TX %s: Enviando SIN CIFRAR (partner sin clave).", self.id)
 
         # ==========================================
         # ENVÍO DE LA PETICIÓN
