@@ -5,6 +5,7 @@ import json
 import logging
 import base64
 import binascii
+from datetime import datetime, timezone
 
 _logger = logging.getLogger(__name__)
 
@@ -378,7 +379,11 @@ class BestPayApiController(http.Controller):
         
         # [Paso 6 - Creación del registro]
         try:
-            internal_reference = f"BPAY-{external_reference}-{fields.Datetime.now().strftime('%Y%m%d%H%M%S')}"
+            # Microsegundos reales: fields.Datetime.now() trunca a segundos y dos
+            # create con la misma referencia externa en el mismo segundo chocaban
+            # contra la restricción única de 'reference'.
+            reference_stamp = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')
+            internal_reference = f"BPAY-{external_reference}-{reference_stamp}"
             
             tx = request.env['payment.transaction'].sudo().create({
                 'reference': internal_reference,
