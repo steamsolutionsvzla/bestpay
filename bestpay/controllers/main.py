@@ -139,11 +139,12 @@ class BestPayApiController(http.Controller):
 
         # Validaciones de campos obligatorios
         if not all([provider_code, currency_code, amount, external_reference]):
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message='Faltan campos obligatorios: (provider, currency, amount, external_reference).',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if external_reference:
             transaccion_existente = request.env['payment.transaction'].sudo().search([
@@ -207,18 +208,20 @@ class BestPayApiController(http.Controller):
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
         if not provider:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'El proveedor "{provider_code}" no existe.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if provider.id not in partner.allowed_provider_ids.ids:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'El proveedor "{provider_code}" no está permitido para este cliente.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         method_code = kwargs.get('payment_method')
         payment_method = False
@@ -235,20 +238,22 @@ class BestPayApiController(http.Controller):
             payment_method = provider.payment_method_ids[:1]
 
         if not payment_method:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         # 5. Validar Moneda
         currency = request.env['res.currency'].sudo().search([('name', '=', str(currency_code).upper())], limit=1)
         if not currency:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'La moneda "{currency_code}" no existe.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         tx_dummy = request.env['payment.transaction'].sudo().new()
         tasa_bcv = tx_dummy._get_bcv_rate_or_fetch()
@@ -256,17 +261,19 @@ class BestPayApiController(http.Controller):
         try:
             monto_recibido = float(amount)
             if monto_recibido <= 0:
-                return self._bestpay_standard_response(
+                response = self._bestpay_standard_response(
                     status='error',
                     message='El monto debe ser un valor mayor a cero.',
                     transaction_status='error'
                 )
+                return self._bestpay_encrypt_or_error(response, partner)
         except (ValueError, TypeError):
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message='El formato del campo "amount" es inválido.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
             
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
@@ -327,11 +334,12 @@ class BestPayApiController(http.Controller):
                 'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'Error en Odoo: {str(e)}',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
 
         # 7. Delegar el procesamiento al banco
         try:
@@ -343,7 +351,7 @@ class BestPayApiController(http.Controller):
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
             
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
                 message=error_msg,
@@ -351,6 +359,7 @@ class BestPayApiController(http.Controller):
                 payment_details={'error': error_msg},
                 payment_link=self._bestpay_extract_payment_link(tx=tx),
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if datos_banco and 'error' in datos_banco:
             try:
@@ -358,7 +367,7 @@ class BestPayApiController(http.Controller):
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
             
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
                 message=datos_banco['error'],
@@ -366,6 +375,7 @@ class BestPayApiController(http.Controller):
                 payment_details=datos_banco,
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
+            return self._bestpay_encrypt_or_error(response, partner)
 
         # 8. El link ya fue emitido: la transacción queda pendiente de pago.
         # 'pending' permite que el cron de expiración y los filtros de estado
