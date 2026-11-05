@@ -115,96 +115,22 @@ class BestPayApiController(http.Controller):
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
         # ========================================================================
-        # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO (OBLIGATORIO)
+        # 1-3. AUTENTICACIÓN, PARTNER Y DESCIFRADO (lógica común de la API)
         # ========================================================================
-        is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
-        if not is_encrypted:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Payload debe estar cifrado con AES-256-GCM. Agregar header X-BestPay-Encrypted: true',
-                transaction_status='error'
-            )
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
+        if error_resp is not None:
+            return error_resp
+
+        partner, decrypted_data = auth_result
+
+        # Actualizamos kwargs con los datos descifrados para que el resto de la
+        # lógica siga leyéndolos igual que antes.
+        kwargs.update(decrypted_data)
 
         # ========================================================================
-        # 2. VALIDAR CREDENCIALES M2M (Client Credentials) PARA OBTENER EL PARTNER
+        # 4. RESTO DE LA LÓGICA (usa los datos descifrados)
         # ========================================================================
-        auth_header = request.httprequest.headers.get('Authorization', '')
-        if not auth_header.startswith('Basic '):
-            return self._bestpay_standard_response(
-                status='error',
-                message='Autenticación requerida. Use Basic Auth con Client ID y Client Secret.',
-                transaction_status='error'
-            )
-
-        try:
-            encoded_token = auth_header[6:].strip()
-            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
-            if ':' not in decoded_credentials:
-                raise ValueError('Formato inválido')
-        except (ValueError, UnicodeDecodeError, binascii.Error):
-            return self._bestpay_standard_response(
-                status='error',
-                message='Credenciales Basic malformadas.',
-                transaction_status='error'
-            )
-
-        if not request.db:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Base de datos no especificada en la petición.',
-                transaction_status='error'
-            )
-
-        partner = request.env['res.partner'].sudo().search([
-            ('is_api_client', '=', True),
-            ('bestpay_basic_token', '=', encoded_token),
-        ], limit=1)
-        
-        if not partner:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Credenciales inválidas o cliente no autorizado.',
-                transaction_status='error'
-            )
-
-        if not self._bestpay_key_is_usable(partner.bestpay_encryption_key):
-            _logger.error(
-                "[API] Cliente %s sin clave de cifrado válida. No se procesa la petición.",
-                partner.name,
-            )
-            return self._bestpay_standard_response(
-                status='error',
-                message='El cliente no tiene una clave de cifrado válida configurada. Contacta a BestPay.',
-                transaction_status='error'
-            )
-
-        # ========================================================================
-        # 3. DESCIFRAR EL PAYLOAD USANDO LA CLAVE DEL PARTNER
-        # ========================================================================
-        try:
-            from ..lib.crypto_utils import decrypt_payload
-            
-            # En type='json', Odoo ya puso el body parseado en kwargs
-            encrypted_data = kwargs
-            
-            # Desciframos usando la clave del partner que acabamos de validar
-            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
-            
-            # TRUCO: Actualizamos kwargs con los datos descifrados. 
-            # Así el resto de tu código sigue funcionando sin cambiar nada.
-            kwargs.update(decrypted_data)
-            
-        except Exception as e:
-            return self._bestpay_standard_response(
-                status='error',
-                message=f'Error descifrando payload: {str(e)}',
-                transaction_status='error'
-            )
-
-        # ========================================================================
-        # 4. RESTO DE TU LÓGICA (INTACTA, AHORA USA LOS DATOS DESCIFRADOS)
-        # ========================================================================
-        # 3. Leer los datos directamente de kwargs (ahora descifrados)
+        # Leer los datos directamente de kwargs (ahora descifrados)
         provider_code = kwargs.get('provider')
         currency_code = kwargs.get('currency')
         amount = kwargs.get('amount')
