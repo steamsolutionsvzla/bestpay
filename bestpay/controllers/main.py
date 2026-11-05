@@ -466,8 +466,12 @@ class BestPayApiController(http.Controller):
         # ========================================================================
         return self._bestpay_encrypt_or_error(response, partner)
 
-    def _bestpay_auth_and_decrypt(self):
-        """Autenticación, validación de partner y descifrado común para APIs BestPay."""
+    def _bestpay_auth_and_decrypt(self, params):
+        """Autenticación, validación de partner y descifrado común para APIs BestPay.
+
+        El payload cifrado debe venir dentro de ``params`` del sobre JSON-RPC,
+        igual que en ``/api/v1/transaction/create``.
+        """
         # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO
         is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
         if not is_encrypted:
@@ -528,18 +532,17 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
-        # 3. DESCIFRAR
+        # 3. DESCIFRAR (el payload viene dentro de params, igual que en create)
+        if not isinstance(params, dict) or not params:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Falta params en el sobre JSON-RPC o el payload cifrado está vacío.',
+                transaction_status='error'
+            )
+
         try:
             from ..lib.crypto_utils import decrypt_payload
-            encrypted_data = request.httprequest.get_json(silent=True) or {}
-            if not encrypted_data and hasattr(request, 'get_json'):
-                try:
-                    encrypted_data = request.get_json(force=True, silent=True) or {}
-                except Exception:
-                    encrypted_data = {}
-            if not encrypted_data:
-                encrypted_data = kwargs if kwargs else {}
-            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
+            decrypted_data = decrypt_payload(params, partner.bestpay_encryption_key)
             return (partner, decrypted_data), None
         except Exception as e:
             return None, self._bestpay_standard_response(
@@ -550,7 +553,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transactions/search', type='json', auth='none', methods=['POST'], csrf=False)
     def search_transactions_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -580,7 +583,7 @@ class BestPayApiController(http.Controller):
     @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
     @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
     def get_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -610,7 +613,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
     def cancel_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
