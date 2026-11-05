@@ -15,7 +15,9 @@
             <field name="code">bdv</field>
             <field name="state">enabled</field>
             <field name="bdv_api_url">https://bdvconciliacionqa.banvenez.com:444/getMovement/v2</field>
-            <field name="bdv_environment">qa</field>
+            <!-- bdv_environment NO se define aquí: el upgrade re-aplica este XML (noupdate="0")
+                 y resetearía el selector a QA. Se deja el default='qa' del campo Python, que solo
+                 aplica al crear el proveedor. -->
             <field name="payment_method_ids" eval="[(4, ref('payment_method_bdv_pagomovil'))]"/>
         </record>
 
