@@ -466,8 +466,12 @@ class BestPayApiController(http.Controller):
         # ========================================================================
         return self._bestpay_encrypt_or_error(response, partner)
 
-    def _bestpay_auth_and_decrypt(self):
-        """Autenticación, validación de partner y descifrado común para APIs BestPay."""
+    def _bestpay_auth_and_decrypt(self, **kwargs):
+        """Autenticación, validación de partner y descifrado común para APIs BestPay.
+
+        Recibe el mismo ``kwargs`` que el controlador obtiene del envelope
+        JSON-RPC para que get/cancel descifren igual que /transaction/create.
+        """
         # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO
         is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
         if not is_encrypted:
@@ -529,16 +533,34 @@ class BestPayApiController(http.Controller):
             )
 
         # 3. DESCIFRAR
+        # Igual que /transaction/create: Odoo entrega el contenido del envelope
+        # JSON-RPC ("params") en kwargs. Se prioriza kwargs para que get/cancel
+        # acepten exactamente la misma petición que create, y se deja el body
+        # crudo como respaldo para clientes que envían el payload plano.
         try:
             from ..lib.crypto_utils import decrypt_payload
-            encrypted_data = request.httprequest.get_json(silent=True) or {}
-            if not encrypted_data and hasattr(request, 'get_json'):
-                try:
-                    encrypted_data = request.get_json(force=True, silent=True) or {}
-                except Exception:
-                    encrypted_data = {}
-            if not encrypted_data:
-                encrypted_data = kwargs if kwargs else {}
+
+            def _encrypted_candidate(data):
+                if isinstance(data, dict) and all(
+                    key in data for key in ('v', 'alg', 'ct', 'iv', 'tag')
+                ):
+                    return data
+                return None
+
+            encrypted_data = _encrypted_candidate(kwargs)
+
+            if encrypted_data is None and isinstance(kwargs, dict):
+                encrypted_data = _encrypted_candidate(kwargs.get('params'))
+
+            if encrypted_data is None:
+                body = request.httprequest.get_json(silent=True) or {}
+                encrypted_data = _encrypted_candidate(body)
+                if encrypted_data is None and isinstance(body, dict):
+                    encrypted_data = _encrypted_candidate(body.get('params'))
+
+            if encrypted_data is None:
+                raise ValueError('Payload cifrado incompleto o formato inválido.')
+
             decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
             return (partner, decrypted_data), None
         except Exception as e:
@@ -550,7 +572,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transactions/search', type='json', auth='none', methods=['POST'], csrf=False)
     def search_transactions_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(**kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -580,7 +602,7 @@ class BestPayApiController(http.Controller):
     @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
     @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
     def get_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(**kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -610,7 +632,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
     def cancel_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(**kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
