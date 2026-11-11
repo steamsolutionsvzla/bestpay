@@ -44,15 +44,42 @@ class BestpayBDVController(http.Controller):
             and transaction._bestpay_is_link_expired()
         )
 
+    def _bestpay_render_result(self, transaction, status, message):
+        """Renderiza la pantalla de resultado e inyecta los botones de salida.
+
+        - success: muestra "Volver al portal" y redirige automáticamente.
+        - rejected: Pago Móvil puede reintentarse con el mismo link.
+        - expired / error: solo muestra el botón de retorno, sin auto.
+
+        Si el tercero no configuró ninguna URL de retorno, la pantalla se
+        comporta igual que antes (sin botones ni redirección).
+        """
+        retry_url = False
+        if (
+            status == 'rejected'
+            and transaction.payment_method_id.code != 'bdv_c2p'
+            and transaction.uuid_hash
+        ):
+            retry_url = f"/pago/bdv/checkout?hash={transaction.uuid_hash}"
+
+        return request.render('bestpay_bdv.bdv_checkout_result', {
+            'transaction': transaction,
+            'status': status,
+            'message': message,
+            'return_url': transaction._bdv_get_return_url(status),
+            'retry_url': retry_url,
+            'return_seconds': 10 if status == 'success' else 0,
+        })
+
     def _bestpay_expired_link_response(self, transaction):
         """Renderiza la pantalla de link vencido y sincroniza el estado si hace falta."""
         if transaction.state in ('draft', 'pending') and transaction._bestpay_is_link_expired():
             transaction._bestpay_mark_as_unpaid()
-        return request.render('bestpay_bdv.bdv_checkout_result', {
-            'transaction': transaction,
-            'status': 'expired',
-            'message': 'Este link de pago venció. Por favor solicita un nuevo link de pago.'
-        })
+        return self._bestpay_render_result(
+            transaction,
+            'expired',
+            'Este link de pago venció. Por favor solicita un nuevo link de pago.',
+        )
 
     # =====================================================
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
@@ -70,25 +97,25 @@ class BestpayBDVController(http.Controller):
             return request.not_found()
             
         if transaction.state == 'done':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'success',
-                'message': 'Este pago ya fue procesado exitosamente.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'success',
+                'Este pago ya fue procesado exitosamente.',
+            )
 
         if transaction.state == 'error':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         # Link vencido ('no_pagado' o más de 48h desde su creación): no se puede pagar.
         if self._bestpay_link_is_unavailable(transaction):
@@ -184,25 +211,25 @@ class BestpayBDVController(http.Controller):
             return request.not_found()
 
         if transaction.state == 'done':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'success',
-                'message': 'Este pago ya fue procesado exitosamente.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'success',
+                'Este pago ya fue procesado exitosamente.',
+            )
 
         if transaction.state == 'error':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         # Bloqueo del POST: evita pagar con el HTML ya abierto de un link vencido.
         if self._bestpay_link_is_unavailable(transaction):
@@ -307,32 +334,28 @@ class BestpayBDVController(http.Controller):
             is_approved = transaction.bdv_send_conciliation()
             
             if is_approved:
-                return request.render('bestpay_bdv.bdv_checkout_result', {
-                    'transaction': transaction,
-                    'status': 'success',
-                    'message': '¡Pago aprobado exitosamente por el Banco de Venezuela!'
-                })
+                return self._bestpay_render_result(
+                    transaction,
+                    'success',
+                    '¡Pago aprobado exitosamente por el Banco de Venezuela!',
+                )
             else:
-                return request.render('bestpay_bdv.bdv_checkout_result', {
-                    'transaction': transaction,
-                    'status': 'error',
-                    'message': f"Pago rechazado: {transaction.bdv_conciliation_message or 'Revise los datos e intente nuevamente.'}"
-                })
+                return self._bestpay_render_result(
+                    transaction,
+                    'rejected',
+                    f"Pago rechazado: {transaction.bdv_conciliation_message or 'Revise los datos e intente nuevamente.'}",
+                )
 
         except UserError as e:
             _logger.error(f"[BDV] Error de usuario: {str(e)}")
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': str(e)
-            })
+            return self._bestpay_render_result(transaction, 'error', str(e))
         except Exception as e:
             _logger.error(f"[BDV] Error inesperado: {str(e)}")
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Ocurrió un error inesperado al procesar el pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Ocurrió un error inesperado al procesar el pago.',
+            )
     
 
     # =====================================================

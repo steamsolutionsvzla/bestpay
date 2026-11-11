@@ -4,6 +4,7 @@ import logging
 import requests
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
@@ -18,6 +19,14 @@ class PaymentTransactionBDV(models.Model):
         help="URL completa del formulario de pago que se envía al cliente final.",
         copy=False,
         readonly=True,
+    )
+
+    bdv_return_url_3ro = fields.Char(
+        string="URL de Retorno (3ro) BDV",
+        help="URL del portal del cliente (ej. Koole) a la que se devuelve al pagador "
+             "al terminar el checkout. Si se deja vacía se usa la URL por defecto "
+             "configurada en la ficha del cliente API.",
+        copy=False,
     )
 
     # =====================================================
@@ -349,10 +358,17 @@ class PaymentTransactionBDV(models.Model):
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         payment_link = f"{base_url}/pago/bdv/checkout?hash={self.uuid_hash}"
 
-        self.write({
+        # URL de retorno del tercero enviada en caliente por la API (opcional).
+        return_url_3ro = (data.get('return_url_3ro') or '').strip() if isinstance(data, dict) else ''
+
+        vals = {
             'payment_link': payment_link,
             'bestpay_flow_type': 'redirect',
-        })
+        }
+        if return_url_3ro:
+            vals['bdv_return_url_3ro'] = return_url_3ro
+
+        self.write(vals)
 
         _logger.info("[BDV] Link generado con UUID_HASH para TX %s: %s", self.id, payment_link)
 
@@ -384,6 +400,55 @@ class PaymentTransactionBDV(models.Model):
         })
 
         return datos_banco
+
+    # =========================================================================
+    # RETORNO AL PORTAL DEL TERCERO (Koole / e-commerce)
+    # =========================================================================
+    def _bdv_get_return_url(self, status=None):
+        """Construye la URL a la que se devuelve al pagador al terminar el checkout.
+
+        Prioridad:
+        1. URL enviada en caliente por el tercero para esta transacción.
+        2. URL por defecto configurada en la ficha del cliente API (Koole).
+        3. Sin URL: el checkout se queda en la pantalla de resultado.
+
+        Solo se aceptan esquemas http/https para evitar redirecciones abiertas.
+        """
+        self.ensure_one()
+        partner = self.bestpay_client_id or self.partner_id
+        raw_url = (self.bdv_return_url_3ro or '').strip()
+        if not raw_url and partner:
+            raw_url = (partner.default_return_url_3ro or '').strip()
+        if not raw_url:
+            return False
+
+        parts = urlsplit(raw_url)
+        if parts.scheme.lower() not in ('http', 'https') or not parts.netloc:
+            _logger.warning(
+                "[BDV] URL de retorno inválida para TX %s (se ignora): %s",
+                self.id, raw_url,
+            )
+            return False
+
+        # Se conservan los parámetros que ya traiga la URL y se reemplazan los
+        # nuestros para que un reintento no duplique valores viejos.
+        params = [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key not in ('bestpay_status', 'external_reference')
+        ]
+        if status:
+            params.append(('bestpay_status', status))
+            if self.external_reference:
+                params.append(('external_reference', self.external_reference))
+
+        return urlunsplit((
+            parts.scheme,
+            parts.netloc,
+            parts.path,
+            urlencode(params),
+            parts.fragment,
+        ))
 
     # =========================================================================
     # MÉTODOS API C2P CUENTAS MÚLTIPLES (BDV)

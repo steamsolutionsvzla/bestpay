@@ -694,6 +694,17 @@ function bpConsultarEstadoNotificacion() {
                         .error-icon { color: #dc3545; }
                         .expired-icon { color: #f0ad4e; }
                         .expired-title { color: #f0ad4e; }
+                        .btn-bdv {
+                            background: #0033a0;
+                            border-color: #0033a0;
+                            color: #fff;
+                            font-weight: 600;
+                        }
+                        .btn-bdv:hover, .btn-bdv:focus {
+                            background: #002a80;
+                            border-color: #002a80;
+                            color: #fff;
+                        }
                         .bp-ref-wrapper{
                             position: relative;
                             display: inline-block;
@@ -779,6 +790,31 @@ function bpConsultarEstadoNotificacion() {
                                                 <div class="row"><div class="col-5"><strong>Fecha:</strong></div><div class="col-7 text-end"><t t-esc="transaction.bdv_fecha_pago and transaction.bdv_fecha_pago.strftime('%d/%m/%Y') or transaction.create_date.strftime('%d/%m/%Y %H:%M')"/></div></div>
                                             </div>
                                         </t>
+
+                                        <!-- BOTONES DE SALIDA: reintento y retorno al portal del tercero -->
+                                        <div t-if="retry_url or return_url" class="d-grid gap-2 mt-4">
+                                            <a t-if="retry_url"
+                                               t-att-href="retry_url"
+                                               class="btn btn-bdv btn-lg">
+                                                <i class="fa fa-redo me-2"></i> Intentar de nuevo
+                                            </a>
+                                            <a t-if="return_url"
+                                               t-att-href="return_url"
+                                               class="btn btn-light btn-lg border text-muted">
+                                                <i class="fa fa-arrow-left me-2"></i> Volver al portal
+                                            </a>
+                                            <small t-if="return_url and return_seconds"
+                                                   class="text-muted d-block mt-2">
+                                                Volviendo automáticamente en
+                                                <span id="bpReturnCountdown" t-esc="return_seconds"></span>
+                                                segundos…
+                                            </small>
+                                        </div>
+
+                                        <div id="bpAutoReturnData"
+                                             class="d-none"
+                                             t-att-data-url="return_url or ''"
+                                             t-attf-data-seconds="#{return_seconds or 0}"></div>
                                     </div>
                                 </div>
                             </div>
@@ -811,6 +847,31 @@ function bpConsultarEstadoNotificacion() {
                             try { document.execCommand('copy'); } catch(e){}
                             document.body.removeChild(ta); done();
                         }
+//]]>
+                    </script>
+
+                    <!-- Retorno automático al portal del tercero (solo en éxito) -->
+                    <script type="text/javascript">
+//<![CDATA[
+                        (function () {
+                            var data = document.getElementById('bpAutoReturnData');
+                            if (!data) { return; }
+                            var target = data.getAttribute('data-url');
+                            var seconds = parseInt(data.getAttribute('data-seconds'), 10) || 0;
+                            if (!target || seconds <= 0) { return; }
+
+                            var label = document.getElementById('bpReturnCountdown');
+                            var remaining = seconds;
+                            var timer = setInterval(function () {
+                                remaining -= 1;
+                                if (remaining <= 0) {
+                                    clearInterval(timer);
+                                    window.location.replace(target);
+                                    return;
+                                }
+                                if (label) { label.textContent = remaining; }
+                            }, 1000);
+                        })();
 //]]>
                     </script>
                 </body>
