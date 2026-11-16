@@ -270,6 +270,69 @@
                         }
                     }
 
+                    function bpRehabilitarBotonPago() {
+                        var btn = document.getElementById('btn-process-payment');
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.innerHTML = '&lt;i class="fa fa-lock me-2"&gt;&lt;/i&gt; Confirmar y Pagar';
+                        }
+                    }
+
+                    function bpUrlResultado(res) {
+                        if (res &amp;&amp; res.redirect_url) return res.redirect_url;
+                        if (res &amp;&amp; res.payment_link) return res.payment_link;
+                        return '/pago/bdv/checkout?hash=' + encodeURIComponent(uuidHash);
+                    }
+
+                    function bpIrAResultado(res) {
+                        bpDetenerWatchdogPago();
+                        window.location.href = bpUrlResultado(res);
+                    }
+
+                    async function bpConsultarEstadoC2P() {
+                        try {
+                            var response = await fetch('/api/bestpay/v1/c2p/status', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    jsonrpc: '2.0',
+                                    method: 'call',
+                                    params: { uuid_hash: uuidHash }
+                                })
+                            });
+                            var data = await response.json();
+                            return (data &amp;&amp; data.result) ? data.result : {};
+                        } catch (err) {
+                            return {};
+                        }
+                    }
+
+                    var bpWatchdogPago = null;
+
+                    function bpDetenerWatchdogPago() {
+                        if (bpWatchdogPago) {
+                            clearInterval(bpWatchdogPago);
+                            bpWatchdogPago = null;
+                        }
+                    }
+
+                    // Vigila el estado mientras el banco procesa el cobro: si la
+                    // respuesta HTTP se pierde pero el pago sí quedó registrado,
+                    // el cliente termina en el comprobante sin refrescar a mano.
+                    function bpIniciarWatchdogPago() {
+                        var intentos = 0;
+                        bpDetenerWatchdogPago();
+                        bpWatchdogPago = setInterval(async function() {
+                            intentos += 1;
+                            var estado = await bpConsultarEstadoC2P();
+                            if (estado.status === 'done') {
+                                bpIrAResultado(estado);
+                            } else if (intentos >= 20) {
+                                bpDetenerWatchdogPago();
+                            }
+                        }, 3000);
+                    }
+
                     document.addEventListener('DOMContentLoaded', function() {
                         var step1Form = document.getElementById('step1-form');
                         var step2Form = document.getElementById('step2-form');
@@ -359,6 +422,8 @@
                                     }
                                 };
 
+                                bpIniciarWatchdogPago();
+
                                 try {
                                     var response = await fetch('/api/bestpay/v1/c2p/process_payment', {
                                         method: 'POST',
@@ -366,28 +431,34 @@
                                         body: JSON.stringify(payload)
                                     });
                                     var data = await response.json();
+                                    var res = (data &amp;&amp; data.result) ? data.result : {};
+                                    bpDetenerWatchdogPago();
 
-                                    if (data.result &amp;&amp; data.result.success) {
-                                        if (data.result.redirect_url) {
-                                            window.location.href = data.result.redirect_url;
-                                        }
-                                    } else {
-                                        var errMsg = "El banco rechazo el pago.";
-                                        if (data.result &amp;&amp; data.result.error) {
-                                            errMsg = data.result.error;
-                                        }
-                                        showError(errMsg);
-                                        if (btn) {
-                                            btn.disabled = false;
-                                            btn.innerHTML = '&lt;i class="fa fa-lock me-2"&gt;&lt;/i&gt; Confirmar y Pagar';
-                                        }
+                                    // Camino feliz: el banco aprobó el cobro.
+                                    if (res.success || res.redirect_url) {
+                                        bpIrAResultado(res);
+                                        return;
                                     }
+
+                                    // La respuesta puede ser de error aunque el banco
+                                    // sí haya cobrado (reintento, timeout, etc.).
+                                    var estado = await bpConsultarEstadoC2P();
+                                    if (estado.status === 'done') {
+                                        bpIrAResultado(estado);
+                                        return;
+                                    }
+
+                                    showError(res.error || 'El banco rechazo el pago.');
+                                    bpRehabilitarBotonPago();
                                 } catch (err) {
-                                    showError("Error de red. Intente nuevamente.");
-                                    if (btn) {
-                                        btn.disabled = false;
-                                        btn.innerHTML = '&lt;i class="fa fa-lock me-2"&gt;&lt;/i&gt; Confirmar y Pagar';
+                                    bpDetenerWatchdogPago();
+                                    var estadoTrasError = await bpConsultarEstadoC2P();
+                                    if (estadoTrasError.status === 'done') {
+                                        bpIrAResultado(estadoTrasError);
+                                        return;
                                     }
+                                    showError("Error de red. Intente nuevamente.");
+                                    bpRehabilitarBotonPago();
                                 }
                             });
                         }

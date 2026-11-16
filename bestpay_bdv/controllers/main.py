@@ -648,6 +648,15 @@ class BestpayBDVController(http.Controller):
                 "[BDV C2P Process] Bloqueado para Tx %s (estado: %s): %s",
                 transaction.reference, transaction.state, unavailable_reason
             )
+            # Si el cobro ya se completó (doble envío o página desactualizada),
+            # el navegador debe ir al comprobante en vez de mostrar un error.
+            if transaction.state == 'done':
+                return {
+                    'success': True,
+                    'message': 'Este pago ya fue procesado exitosamente.',
+                    'redirect_url': f"/pago/bdv/checkout?hash={uuid_hash}",
+                    'end_to_end_id': transaction.bdv_c2p_end_to_end_id,
+                }
             return {'success': False, 'error': unavailable_reason}
 
         # El cobro solo se permite si el OTP fue solicitado previamente.
@@ -668,14 +677,16 @@ class BestpayBDVController(http.Controller):
             result = transaction.bdv_c2p_process_payment()
             
             if result.get('success'):
-                # Generamos la URL de éxito para que el frontend redirija o renderice
+                # Redirección relativa: no depende de que web.base.url apunte al
+                # host público por el que está navegando el cliente.
+                redirect_path = f"/pago/bdv/checkout?hash={uuid_hash}"
                 base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url')
-                success_url = f"{base_url}/pago/bdv/checkout?hash={uuid_hash}&status=success"
-                
                 return {
                     'success': True,
                     'message': 'Pago aprobado exitosamente.',
-                    'payment_link': success_url,
+                    'redirect_url': redirect_path,
+                    'payment_link': f"{base_url}{redirect_path}",
+                    'reference': transaction.bdv_c2p_reference_generated or transaction.reference,
                     'end_to_end_id': transaction.bdv_c2p_end_to_end_id
                 }
             else:
@@ -702,8 +713,49 @@ class BestpayBDVController(http.Controller):
             except Exception:
                 pass
             return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}
-    
-        # =====================================================
+
+    # =====================================================
+    # 6.1 API C2P: CONSULTA DE ESTADO (Reconciliación del checkout)
+    # =====================================================
+    @http.route('/api/bestpay/v1/c2p/status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def c2p_status(self, uuid_hash=None, **kw):
+        """
+        Consulta de solo lectura del estado del cobro C2P.
+
+        El checkout la usa para reconciliar cuando la respuesta del banco no
+        llegó (timeout, corte de red, proxy) o cuando el cliente reenvía el OTP.
+        No ejecuta auto-match de notificaciones ni ningún otro efecto lateral.
+        """
+        if not uuid_hash:
+            return {'status': 'error', 'message': 'Falta el identificador de la transacción.'}
+
+        transaction = request.env['payment.transaction'].sudo().search(
+            [('uuid_hash', '=', uuid_hash)], limit=1
+        )
+        if not transaction.exists() or transaction.provider_id.code != 'bdv':
+            return {'status': 'error', 'message': 'Transacción no válida.'}
+
+        # Lectura fresca: el cobro pudo confirmarse en otro worker/proceso.
+        transaction.invalidate_recordset([
+            'state', 'bdv_c2p_status',
+            'bdv_c2p_end_to_end_id', 'bdv_c2p_reference_generated',
+        ])
+
+        if transaction.state == 'done':
+            return {
+                'status': 'done',
+                'message': 'Pago completado con éxito.',
+                'redirect_url': f"/pago/bdv/checkout?hash={uuid_hash}",
+                'end_to_end_id': transaction.bdv_c2p_end_to_end_id,
+            }
+
+        return {
+            'status': 'pending' if transaction.state in ('draft', 'pending') else transaction.state,
+            'message': 'El pago aún no ha sido confirmado.',
+            'c2p_status': transaction.bdv_c2p_status,
+        }
+
+    # =====================================================
     # 7. API CONSULTA DE MOVIMIENTOS BDV (Proxy para E-commerce)
     # =====================================================
     @http.route('/api/bestpay/v1/bdv/consulta/movimientos', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
