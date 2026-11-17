@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import re
 import secrets
 import time
 from odoo import http, fields
@@ -80,6 +81,44 @@ class BestpayBDVController(http.Controller):
             'expired',
             'Este link de pago venció. Por favor solicita un nuevo link de pago.',
         )
+
+    # =====================================================
+    # C2P INTERBANCARIO (clave del cliente)
+    # =====================================================
+    # El paymentkey del BDV solo envía la clave a clientes del BDV. Para pagadores
+    # de otros bancos la clave C2P la genera el cliente en su propia banca, por lo
+    # que no se solicita al BDV y se usa directamente en el cobro.
+    C2P_CLIENT_KEY_MESSAGE = (
+        'Genera tu clave C2P en la aplicación o banca en línea de tu banco '
+        'e ingrésala aquí para autorizar el cobro.'
+    )
+
+    # Códigos de la tabla de errores del BDV con un mensaje accionable.
+    C2P_BANK_ERRORS = {
+        '1002': 'El banco del cliente no respondió a tiempo. Intenta nuevamente.',
+        '1014': 'El cliente no está afiliado a Pago Móvil en el banco seleccionado.',
+        '1015': 'El número no está afiliado a la Clave Móvil del banco seleccionado.',
+        '1034': 'Saldo insuficiente en la cuenta del cliente.',
+        '1050': 'El banco tardó demasiado en responder. Intenta nuevamente.',
+        '1055': 'La clave C2P no es válida o expiró. Genera una nueva en tu banco e inténtalo otra vez.',
+        '1056': 'El número de teléfono no corresponde con el titular de la cuenta.',
+        '1061': 'El monto supera el límite diario permitido por el banco.',
+        '1062': 'La cuenta del cliente presenta inconvenientes. Debe comunicarse con su banco.',
+        '1091': 'El banco seleccionado no está disponible para C2P en este momento.',
+        '1092': 'El banco seleccionado no se encuentra afiliado a C2P.',
+    }
+
+    def _bestpay_c2p_client_key_message(self):
+        """Instrucción genérica para que el pagador genere su clave C2P."""
+        return self.C2P_CLIENT_KEY_MESSAGE
+
+    def _bestpay_c2p_bank_error(self, code, bank_message):
+        """Traduce el código de error del BDV a un mensaje claro para el cliente."""
+        code = str(code or '').strip()
+        mapped = self.C2P_BANK_ERRORS.get(code)
+        if mapped:
+            return f"{mapped} (código {code})"
+        return bank_message or 'El banco rechazó el pago.'
 
     # =====================================================
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
@@ -600,20 +639,49 @@ class BestpayBDVController(http.Controller):
 
         try:
             # 1. Guardamos los datos iniciales en la transacción
+            bank_code = (customer_bank_code or '0102').strip()
             transaction.write({
                 'bdv_c2p_customer_document_id': customer_document_id,
                 'bdv_c2p_customer_phone': customer_phone,
-                'bdv_c2p_customer_bank_code': customer_bank_code,
+                'bdv_c2p_customer_bank_code': bank_code,
                 'bdv_c2p_status': 'processing'
             })
 
-            # 2. Llamamos al método del modelo que ya creamos
+            # 2. C2P interbancario: la clave la genera el cliente en su banco.
+            # Solo se pide la clave al BDV cuando el pagador es cliente BDV (0102);
+            # para otros bancos el paymentkey del BDV envía una clave BDV que el
+            # banco del pagador rechaza con el código 1055.
+            if bank_code != '0102':
+                transaction.write({'bdv_c2p_status': 'otp_sent'})
+                transaction._bdv_c2p_log_stage(
+                    "GENERATE OTP · CLAVE DEL CLIENTE (sin paymentkey BDV)",
+                    request_payload={
+                        'customerDocumentId': customer_document_id,
+                        'customerNumberInstrument': customer_phone,
+                        'customerBankCode': bank_code,
+                    },
+                )
+                _logger.info(
+                    "[BDV C2P OTP] Banco %s: no se solicita clave al BDV; "
+                    "el cliente genera su clave C2P en su banco.", bank_code
+                )
+                return {
+                    'success': True,
+                    'otp_sent': False,
+                    'message': self._bestpay_c2p_client_key_message(),
+                    'status': 'otp_sent',
+                    'bank_code': bank_code,
+                }
+
+            # 3. Cliente BDV: el banco envía la clave al teléfono.
             result = transaction.bdv_c2p_generate_otp()
-            
+
             return {
                 'success': True,
+                'otp_sent': True,
                 'message': result.get('message', 'OTP enviado correctamente. Revise su teléfono.'),
-                'status': transaction.bdv_c2p_status
+                'status': transaction.bdv_c2p_status,
+                'bank_code': bank_code,
             }
 
         except UserError as e:
@@ -634,8 +702,10 @@ class BestpayBDVController(http.Controller):
             return {'success': False, 'error': 'Faltan datos obligatorios (uuid_hash u OTP).'}
 
         otp_clean = str(otp).strip()
-        if not otp_clean.isdigit() or not (4 <= len(otp_clean) <= 10):
-            return {'success': False, 'error': 'El código OTP no es válido.'}
+        # La clave C2P de otros bancos puede ser alfanumérica; la validación
+        # definitiva la hace el banco. Solo se filtra longitud y caracteres.
+        if not re.fullmatch(r'[A-Za-z0-9]{4,10}', otp_clean):
+            return {'success': False, 'error': 'El código ingresado no es válido.'}
 
         transaction = request.env['payment.transaction'].sudo().search([('uuid_hash', '=', uuid_hash)], limit=1)
         if not transaction.exists() or transaction.provider_id.code != 'bdv':
@@ -695,9 +765,11 @@ class BestpayBDVController(http.Controller):
                 # que el cliente pueda reintentar con un OTP válido.
                 if transaction.bdv_c2p_end_to_end_id:
                     transaction.bdv_c2p_annul()
+                error_code = str(result.get('code') or '')
                 return {
                     'success': False,
-                    'error': result.get('message', 'El banco rechazó el pago.')
+                    'code': error_code,
+                    'error': self._bestpay_c2p_bank_error(error_code, result.get('message')),
                 }
 
         except UserError as e:

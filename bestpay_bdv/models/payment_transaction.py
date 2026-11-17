@@ -615,7 +615,7 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_c2p_status': 'error',
                 'state_message': data.get('message', 'Error desconocido en el proceso de cobro')
             })
-            return {'success': False, 'message': data.get('message')}
+            return {'success': False, 'code': data.get('code'), 'message': data.get('message')}
         except Exception as e:
             self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP) · ERROR", response_payload={'error': str(e)})
             raise
@@ -633,10 +633,21 @@ class PaymentTransactionBDV(models.Model):
         action = "annulment/v2" if env_type == 'qa' else "annulment"
         url = f"{base_url}/{action}"
         
+        # PRODUCCIÓN: para operaciones interbancarias (BDV – otros bancos) el PDF
+        # exige enviar la referencia de origen devuelta por el cobro. En BDV–BDV
+        # debe ir vacía. QA mantiene None (sin cambios respecto al dummy).
+        bank_code = (self.bdv_c2p_customer_bank_code or '0102').strip()
+        if env_type == 'prod':
+            reference_origin = (
+                (self.bdv_c2p_reference_generated or '')
+                if bank_code != '0102' else ''
+            )
+        else:
+            reference_origin = None
+
         payload = {
             "endToEndId": self.bdv_c2p_end_to_end_id,
-            # PRODUCCIÓN: El PDF exige string vacío "". QA mantiene tu original (None) por compatibilidad.
-            "referenceOrigin": "" if env_type == 'prod' else None
+            "referenceOrigin": reference_origin,
         }
         
         _logger.info(f"BDV C2P Annul Request ({env_type.upper()}): {url} | Payload: {payload}")

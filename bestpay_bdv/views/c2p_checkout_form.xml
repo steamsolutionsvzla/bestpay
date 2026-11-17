@@ -208,12 +208,12 @@
 
                                     <form id="step2-form" class="hidden">
                                         <div class="info-box text-center">
-                                            <i class="fa fa-envelope-open-text fa-2x mb-2 d-block"></i>
-                                            Se ha enviado un código OTP a su teléfono. Por favor, ingréselo a continuación para autorizar el cobro.
+                                            <i class="fa fa-envelope-open-text fa-2x mb-2 d-block" id="otp-info-icon"></i>
+                                            <span id="otp-info-text">Se ha enviado un código OTP a su teléfono. Por favor, ingréselo a continuación para autorizar el cobro.</span>
                                         </div>
                                         
                                         <div class="mb-4">
-                                            <label class="form-label">Código OTP</label>
+                                            <label class="form-label" id="otp-label">Código OTP</label>
                                             <input type="text" class="form-control text-center fw-bold fs-4" id="otp_code" placeholder="5551111" maxlength="10" required="1" style="letter-spacing: 5px;"/>
                                         </div>
 
@@ -374,6 +374,26 @@
                                     var data = await response.json();
 
                                     if (data.result &amp;&amp; data.result.success) {
+                                        // El BDV envía la clave a sus clientes; en otros
+                                        // bancos el cliente la genera en su propia banca.
+                                        var otpEnviado = data.result.otp_sent !== false;
+                                        var infoTexto = document.getElementById('otp-info-text');
+                                        var otpLabel = document.getElementById('otp-label');
+                                        var otpInput = document.getElementById('otp_code');
+                                        var infoIcon = document.getElementById('otp-info-icon');
+                                        if (infoTexto &amp;&amp; data.result.message) {
+                                            infoTexto.textContent = data.result.message;
+                                        }
+                                        if (otpLabel) {
+                                            otpLabel.textContent = otpEnviado ? 'Código OTP' : 'Clave C2P';
+                                        }
+                                        if (otpInput) {
+                                            otpInput.placeholder = otpEnviado ? '5551111' : 'Clave C2P';
+                                        }
+                                        if (infoIcon) {
+                                            infoIcon.classList.toggle('fa-envelope-open-text', otpEnviado);
+                                            infoIcon.classList.toggle('fa-key', !otpEnviado);
+                                        }
                                         if (step1Form) step1Form.classList.add('hidden');
                                         if (step2Form) step2Form.classList.remove('hidden');
                                         currentStep = 2;
