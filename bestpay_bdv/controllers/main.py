@@ -89,7 +89,7 @@ class BestpayBDVController(http.Controller):
     # de otros bancos la clave C2P la genera el cliente en su propia banca, por lo
     # que no se solicita al BDV y se usa directamente en el cobro.
     C2P_CLIENT_KEY_MESSAGE = (
-        'Genera tu clave C2P en la aplicación o banca en línea de tu banco '
+        'Genera tu clave C2P de 8 dígitos en la aplicación o banca en línea de tu banco '
         'e ingrésala aquí para autorizar el cobro.'
     )
 
@@ -114,6 +114,10 @@ class BestpayBDVController(http.Controller):
 
     def _bestpay_c2p_bank_error(self, code, bank_message):
         """Traduce el código de error del BDV a un mensaje claro para el cliente."""
+        bank_message = bank_message or ''
+        # El banco devuelve este texto cuando la clave no tiene 8 dígitos.
+        if re.search(r'digit', bank_message, re.IGNORECASE):
+            return 'La clave C2P debe tener 8 dígitos.'
         code = str(code or '').strip()
         mapped = self.C2P_BANK_ERRORS.get(code)
         if mapped:
@@ -734,6 +738,14 @@ class BestpayBDVController(http.Controller):
             return {
                 'success': False,
                 'error': 'Primero debes solicitar el código OTP para esta transacción.'
+            }
+
+        # Clave C2P interbancaria: el banco exige exactamente 8 dígitos.
+        # Se valida aquí para no gastar una llamada al banco con una clave inválida.
+        if (transaction.bdv_c2p_customer_bank_code or '0102') != '0102' and not re.fullmatch(r'\d{8}', otp_clean):
+            return {
+                'success': False,
+                'error': 'La clave C2P debe tener 8 dígitos.',
             }
 
         try:

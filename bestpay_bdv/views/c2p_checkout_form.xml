@@ -308,6 +308,7 @@
                     }
 
                     var bpWatchdogPago = null;
+                    var bpOtpOchoDigitos = false;
 
                     function bpDetenerWatchdogPago() {
                         if (bpWatchdogPago) {
@@ -337,6 +338,18 @@
                         var step1Form = document.getElementById('step1-form');
                         var step2Form = document.getElementById('step2-form');
                         var btnBack = document.getElementById('btn-back');
+
+                        // La clave C2P solo admite dígitos (8 en total).
+                        var otpInputEl = document.getElementById('otp_code');
+                        if (otpInputEl) {
+                            otpInputEl.addEventListener('input', function() {
+                                if (!bpOtpOchoDigitos) return;
+                                var limpio = this.value.replace(/\D/g, '').slice(0, 8);
+                                if (limpio !== this.value) {
+                                    this.value = limpio;
+                                }
+                            });
+                        }
 
                         if (step1Form) {
                             step1Form.addEventListener('submit', async function(e) {
@@ -388,12 +401,14 @@
                                             otpLabel.textContent = otpEnviado ? 'Código OTP' : 'Clave C2P';
                                         }
                                         if (otpInput) {
-                                            otpInput.placeholder = otpEnviado ? '5551111' : 'Clave C2P';
+                                            otpInput.placeholder = otpEnviado ? '5551111' : '8 dígitos';
+                                            otpInput.maxLength = otpEnviado ? 10 : 8;
                                         }
                                         if (infoIcon) {
                                             infoIcon.classList.toggle('fa-envelope-open-text', otpEnviado);
                                             infoIcon.classList.toggle('fa-key', !otpEnviado);
                                         }
+                                        bpOtpOchoDigitos = !otpEnviado;
                                         if (step1Form) step1Form.classList.add('hidden');
                                         if (step2Form) step2Form.classList.remove('hidden');
                                         currentStep = 2;
@@ -426,6 +441,14 @@
                         if (step2Form) {
                             step2Form.addEventListener('submit', async function(e) {
                                 e.preventDefault();
+
+                                // La clave C2P de otros bancos debe tener 8 dígitos.
+                                var otpValor = (document.getElementById('otp_code').value || '').trim();
+                                if (bpOtpOchoDigitos &amp;&amp; !/^\d{8}$/.test(otpValor)) {
+                                    showError('La clave C2P debe tener 8 dígitos.');
+                                    return;
+                                }
+
                                 var btn = document.getElementById('btn-process-payment');
                                 if (btn) {
                                     btn.disabled = true;
@@ -438,7 +461,7 @@
                                     method: "call",
                                     params: {
                                         uuid_hash: uuidHash,
-                                        otp: document.getElementById('otp_code').value
+                                        otp: otpValor
                                     }
                                 };
 
