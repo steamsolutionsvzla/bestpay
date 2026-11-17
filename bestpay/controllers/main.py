@@ -115,96 +115,22 @@ class BestPayApiController(http.Controller):
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
     def create_transaction_api(self, **kwargs):
         # ========================================================================
-        # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO (OBLIGATORIO)
+        # 1-3. AUTENTICACIÓN, PARTNER Y DESCIFRADO (lógica común de la API)
         # ========================================================================
-        is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
-        if not is_encrypted:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Payload debe estar cifrado con AES-256-GCM. Agregar header X-BestPay-Encrypted: true',
-                transaction_status='error'
-            )
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
+        if error_resp is not None:
+            return error_resp
+
+        partner, decrypted_data = auth_result
+
+        # Actualizamos kwargs con los datos descifrados para que el resto de la
+        # lógica siga leyéndolos igual que antes.
+        kwargs.update(decrypted_data)
 
         # ========================================================================
-        # 2. VALIDAR CREDENCIALES M2M (Client Credentials) PARA OBTENER EL PARTNER
+        # 4. RESTO DE LA LÓGICA (usa los datos descifrados)
         # ========================================================================
-        auth_header = request.httprequest.headers.get('Authorization', '')
-        if not auth_header.startswith('Basic '):
-            return self._bestpay_standard_response(
-                status='error',
-                message='Autenticación requerida. Use Basic Auth con Client ID y Client Secret.',
-                transaction_status='error'
-            )
-
-        try:
-            encoded_token = auth_header[6:].strip()
-            decoded_credentials = base64.b64decode(encoded_token, validate=True).decode('utf-8')
-            if ':' not in decoded_credentials:
-                raise ValueError('Formato inválido')
-        except (ValueError, UnicodeDecodeError, binascii.Error):
-            return self._bestpay_standard_response(
-                status='error',
-                message='Credenciales Basic malformadas.',
-                transaction_status='error'
-            )
-
-        if not request.db:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Base de datos no especificada en la petición.',
-                transaction_status='error'
-            )
-
-        partner = request.env['res.partner'].sudo().search([
-            ('is_api_client', '=', True),
-            ('bestpay_basic_token', '=', encoded_token),
-        ], limit=1)
-        
-        if not partner:
-            return self._bestpay_standard_response(
-                status='error',
-                message='Credenciales inválidas o cliente no autorizado.',
-                transaction_status='error'
-            )
-
-        if not self._bestpay_key_is_usable(partner.bestpay_encryption_key):
-            _logger.error(
-                "[API] Cliente %s sin clave de cifrado válida. No se procesa la petición.",
-                partner.name,
-            )
-            return self._bestpay_standard_response(
-                status='error',
-                message='El cliente no tiene una clave de cifrado válida configurada. Contacta a BestPay.',
-                transaction_status='error'
-            )
-
-        # ========================================================================
-        # 3. DESCIFRAR EL PAYLOAD USANDO LA CLAVE DEL PARTNER
-        # ========================================================================
-        try:
-            from ..lib.crypto_utils import decrypt_payload
-            
-            # En type='json', Odoo ya puso el body parseado en kwargs
-            encrypted_data = kwargs
-            
-            # Desciframos usando la clave del partner que acabamos de validar
-            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
-            
-            # TRUCO: Actualizamos kwargs con los datos descifrados. 
-            # Así el resto de tu código sigue funcionando sin cambiar nada.
-            kwargs.update(decrypted_data)
-            
-        except Exception as e:
-            return self._bestpay_standard_response(
-                status='error',
-                message=f'Error descifrando payload: {str(e)}',
-                transaction_status='error'
-            )
-
-        # ========================================================================
-        # 4. RESTO DE TU LÓGICA (INTACTA, AHORA USA LOS DATOS DESCIFRADOS)
-        # ========================================================================
-        # 3. Leer los datos directamente de kwargs (ahora descifrados)
+        # Leer los datos directamente de kwargs (ahora descifrados)
         provider_code = kwargs.get('provider')
         currency_code = kwargs.get('currency')
         amount = kwargs.get('amount')
@@ -213,11 +139,12 @@ class BestPayApiController(http.Controller):
 
         # Validaciones de campos obligatorios
         if not all([provider_code, currency_code, amount, external_reference]):
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message='Faltan campos obligatorios: (provider, currency, amount, external_reference).',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if external_reference:
             transaccion_existente = request.env['payment.transaction'].sudo().search([
@@ -281,18 +208,20 @@ class BestPayApiController(http.Controller):
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
         if not provider:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'El proveedor "{provider_code}" no existe.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if provider.id not in partner.allowed_provider_ids.ids:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'El proveedor "{provider_code}" no está permitido para este cliente.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         method_code = kwargs.get('payment_method')
         payment_method = False
@@ -309,20 +238,22 @@ class BestPayApiController(http.Controller):
             payment_method = provider.payment_method_ids[:1]
 
         if not payment_method:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         # 5. Validar Moneda
         currency = request.env['res.currency'].sudo().search([('name', '=', str(currency_code).upper())], limit=1)
         if not currency:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'La moneda "{currency_code}" no existe.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         tx_dummy = request.env['payment.transaction'].sudo().new()
         tasa_bcv = tx_dummy._get_bcv_rate_or_fetch()
@@ -330,17 +261,19 @@ class BestPayApiController(http.Controller):
         try:
             monto_recibido = float(amount)
             if monto_recibido <= 0:
-                return self._bestpay_standard_response(
+                response = self._bestpay_standard_response(
                     status='error',
                     message='El monto debe ser un valor mayor a cero.',
                     transaction_status='error'
                 )
+                return self._bestpay_encrypt_or_error(response, partner)
         except (ValueError, TypeError):
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message='El formato del campo "amount" es inválido.',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
             
         monto_odoo_usd = 0.0
         monto_calculado_ves = 0.0
@@ -401,11 +334,12 @@ class BestPayApiController(http.Controller):
                 'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 status='error',
                 message=f'Error en Odoo: {str(e)}',
                 transaction_status='error'
             )
+            return self._bestpay_encrypt_or_error(response, partner)
 
         # 7. Delegar el procesamiento al banco
         try:
@@ -417,7 +351,7 @@ class BestPayApiController(http.Controller):
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
             
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
                 message=error_msg,
@@ -425,6 +359,7 @@ class BestPayApiController(http.Controller):
                 payment_details={'error': error_msg},
                 payment_link=self._bestpay_extract_payment_link(tx=tx),
             )
+            return self._bestpay_encrypt_or_error(response, partner)
         
         if datos_banco and 'error' in datos_banco:
             try:
@@ -432,7 +367,7 @@ class BestPayApiController(http.Controller):
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
             
-            return self._bestpay_standard_response(
+            response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
                 message=datos_banco['error'],
@@ -440,6 +375,7 @@ class BestPayApiController(http.Controller):
                 payment_details=datos_banco,
                 payment_link=self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco),
             )
+            return self._bestpay_encrypt_or_error(response, partner)
 
         # 8. El link ya fue emitido: la transacción queda pendiente de pago.
         # 'pending' permite que el cron de expiración y los filtros de estado
@@ -466,8 +402,12 @@ class BestPayApiController(http.Controller):
         # ========================================================================
         return self._bestpay_encrypt_or_error(response, partner)
 
-    def _bestpay_auth_and_decrypt(self):
-        """Autenticación, validación de partner y descifrado común para APIs BestPay."""
+    def _bestpay_auth_and_decrypt(self, params):
+        """Autenticación, validación de partner y descifrado común para APIs BestPay.
+
+        El payload cifrado debe venir dentro de ``params`` del sobre JSON-RPC,
+        igual que en ``/api/v1/transaction/create``.
+        """
         # 1. VERIFICAR QUE EL PAYLOAD ESTÉ CIFRADO
         is_encrypted = request.httprequest.headers.get('X-BestPay-Encrypted') == 'true'
         if not is_encrypted:
@@ -528,18 +468,17 @@ class BestPayApiController(http.Controller):
                 transaction_status='error'
             )
 
-        # 3. DESCIFRAR
+        # 3. DESCIFRAR (el payload viene dentro de params, igual que en create)
+        if not isinstance(params, dict) or not params:
+            return None, self._bestpay_standard_response(
+                status='error',
+                message='Falta params en el sobre JSON-RPC o el payload cifrado está vacío.',
+                transaction_status='error'
+            )
+
         try:
             from ..lib.crypto_utils import decrypt_payload
-            encrypted_data = request.httprequest.get_json(silent=True) or {}
-            if not encrypted_data and hasattr(request, 'get_json'):
-                try:
-                    encrypted_data = request.get_json(force=True, silent=True) or {}
-                except Exception:
-                    encrypted_data = {}
-            if not encrypted_data:
-                encrypted_data = kwargs if kwargs else {}
-            decrypted_data = decrypt_payload(encrypted_data, partner.bestpay_encryption_key)
+            decrypted_data = decrypt_payload(params, partner.bestpay_encryption_key)
             return (partner, decrypted_data), None
         except Exception as e:
             return None, self._bestpay_standard_response(
@@ -550,7 +489,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transactions/search', type='json', auth='none', methods=['POST'], csrf=False)
     def search_transactions_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -580,7 +519,7 @@ class BestPayApiController(http.Controller):
     @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
     @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
     def get_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result
@@ -610,7 +549,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
     def cancel_transaction_api(self, **kwargs):
-        auth_result, error_resp = self._bestpay_auth_and_decrypt()
+        auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
             return error_resp
         partner, decrypted_data = auth_result

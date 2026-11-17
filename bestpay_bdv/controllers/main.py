@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import re
 import secrets
 import time
 from odoo import http, fields
@@ -44,15 +45,84 @@ class BestpayBDVController(http.Controller):
             and transaction._bestpay_is_link_expired()
         )
 
+    def _bestpay_render_result(self, transaction, status, message):
+        """Renderiza la pantalla de resultado e inyecta los botones de salida.
+
+        - success: muestra "Volver al portal" y redirige automáticamente.
+        - rejected: Pago Móvil puede reintentarse con el mismo link.
+        - expired / error: solo muestra el botón de retorno, sin auto.
+
+        Si el tercero no configuró ninguna URL de retorno, la pantalla se
+        comporta igual que antes (sin botones ni redirección).
+        """
+        retry_url = False
+        if (
+            status == 'rejected'
+            and transaction.payment_method_id.code != 'bdv_c2p'
+            and transaction.uuid_hash
+        ):
+            retry_url = f"/pago/bdv/checkout?hash={transaction.uuid_hash}"
+
+        return request.render('bestpay_bdv.bdv_checkout_result', {
+            'transaction': transaction,
+            'status': status,
+            'message': message,
+            'return_url': transaction._bdv_get_return_url(status),
+            'retry_url': retry_url,
+            'return_seconds': 10 if status == 'success' else 0,
+        })
+
     def _bestpay_expired_link_response(self, transaction):
         """Renderiza la pantalla de link vencido y sincroniza el estado si hace falta."""
         if transaction.state in ('draft', 'pending') and transaction._bestpay_is_link_expired():
             transaction._bestpay_mark_as_unpaid()
-        return request.render('bestpay_bdv.bdv_checkout_result', {
-            'transaction': transaction,
-            'status': 'expired',
-            'message': 'Este link de pago venció. Por favor solicita un nuevo link de pago.'
-        })
+        return self._bestpay_render_result(
+            transaction,
+            'expired',
+            'Este link de pago venció. Por favor solicita un nuevo link de pago.',
+        )
+
+    # =====================================================
+    # C2P INTERBANCARIO (clave del cliente)
+    # =====================================================
+    # El paymentkey del BDV solo envía la clave a clientes del BDV. Para pagadores
+    # de otros bancos la clave C2P la genera el cliente en su propia banca, por lo
+    # que no se solicita al BDV y se usa directamente en el cobro.
+    C2P_CLIENT_KEY_MESSAGE = (
+        'Genera tu clave C2P de 8 dígitos en la aplicación o banca en línea de tu banco '
+        'e ingrésala aquí para autorizar el cobro.'
+    )
+
+    # Códigos de la tabla de errores del BDV con un mensaje accionable.
+    C2P_BANK_ERRORS = {
+        '1002': 'El banco del cliente no respondió a tiempo. Intenta nuevamente.',
+        '1014': 'El cliente no está afiliado a Pago Móvil en el banco seleccionado.',
+        '1015': 'El número no está afiliado a la Clave Móvil del banco seleccionado.',
+        '1034': 'Saldo insuficiente en la cuenta del cliente.',
+        '1050': 'El banco tardó demasiado en responder. Intenta nuevamente.',
+        '1055': 'La clave C2P no es válida o expiró. Genera una nueva en tu banco e inténtalo otra vez.',
+        '1056': 'El número de teléfono no corresponde con el titular de la cuenta.',
+        '1061': 'El monto supera el límite diario permitido por el banco.',
+        '1062': 'La cuenta del cliente presenta inconvenientes. Debe comunicarse con su banco.',
+        '1091': 'El banco seleccionado no está disponible para C2P en este momento.',
+        '1092': 'El banco seleccionado no se encuentra afiliado a C2P.',
+    }
+
+    def _bestpay_c2p_client_key_message(self):
+        """Instrucción genérica para que el pagador genere su clave C2P."""
+        return self.C2P_CLIENT_KEY_MESSAGE
+
+    def _bestpay_c2p_bank_error(self, code, bank_message):
+        """Traduce el código de error del BDV a un mensaje claro para el cliente."""
+        bank_message = bank_message or ''
+        # El banco devuelve este texto cuando la clave no tiene 8 dígitos.
+        if re.search(r'digit', bank_message, re.IGNORECASE):
+            return 'La clave C2P debe tener 8 dígitos.'
+        code = str(code or '').strip()
+        mapped = self.C2P_BANK_ERRORS.get(code)
+        if mapped:
+            return f"{mapped} (código {code})"
+        return bank_message or 'El banco rechazó el pago.'
 
     # =====================================================
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
@@ -70,25 +140,25 @@ class BestpayBDVController(http.Controller):
             return request.not_found()
             
         if transaction.state == 'done':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'success',
-                'message': 'Este pago ya fue procesado exitosamente.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'success',
+                'Este pago ya fue procesado exitosamente.',
+            )
 
         if transaction.state == 'error':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         # Link vencido ('no_pagado' o más de 48h desde su creación): no se puede pagar.
         if self._bestpay_link_is_unavailable(transaction):
@@ -184,25 +254,25 @@ class BestpayBDVController(http.Controller):
             return request.not_found()
 
         if transaction.state == 'done':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'success',
-                'message': 'Este pago ya fue procesado exitosamente.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'success',
+                'Este pago ya fue procesado exitosamente.',
+            )
 
         if transaction.state == 'error':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         if transaction.state == 'cancel' and transaction.bdv_conciliation_state != 'rejected':
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Este link de pago ya no está disponible. Por favor solicita un nuevo link de pago.',
+            )
 
         # Bloqueo del POST: evita pagar con el HTML ya abierto de un link vencido.
         if self._bestpay_link_is_unavailable(transaction):
@@ -307,32 +377,28 @@ class BestpayBDVController(http.Controller):
             is_approved = transaction.bdv_send_conciliation()
             
             if is_approved:
-                return request.render('bestpay_bdv.bdv_checkout_result', {
-                    'transaction': transaction,
-                    'status': 'success',
-                    'message': '¡Pago aprobado exitosamente por el Banco de Venezuela!'
-                })
+                return self._bestpay_render_result(
+                    transaction,
+                    'success',
+                    '¡Pago aprobado exitosamente por el Banco de Venezuela!',
+                )
             else:
-                return request.render('bestpay_bdv.bdv_checkout_result', {
-                    'transaction': transaction,
-                    'status': 'error',
-                    'message': f"Pago rechazado: {transaction.bdv_conciliation_message or 'Revise los datos e intente nuevamente.'}"
-                })
+                return self._bestpay_render_result(
+                    transaction,
+                    'rejected',
+                    f"Pago rechazado: {transaction.bdv_conciliation_message or 'Revise los datos e intente nuevamente.'}",
+                )
 
         except UserError as e:
             _logger.error(f"[BDV] Error de usuario: {str(e)}")
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': str(e)
-            })
+            return self._bestpay_render_result(transaction, 'error', str(e))
         except Exception as e:
             _logger.error(f"[BDV] Error inesperado: {str(e)}")
-            return request.render('bestpay_bdv.bdv_checkout_result', {
-                'transaction': transaction,
-                'status': 'error',
-                'message': 'Ocurrió un error inesperado al procesar el pago.'
-            })
+            return self._bestpay_render_result(
+                transaction,
+                'error',
+                'Ocurrió un error inesperado al procesar el pago.',
+            )
     
 
     # =====================================================
@@ -577,20 +643,49 @@ class BestpayBDVController(http.Controller):
 
         try:
             # 1. Guardamos los datos iniciales en la transacción
+            bank_code = (customer_bank_code or '0102').strip()
             transaction.write({
                 'bdv_c2p_customer_document_id': customer_document_id,
                 'bdv_c2p_customer_phone': customer_phone,
-                'bdv_c2p_customer_bank_code': customer_bank_code,
+                'bdv_c2p_customer_bank_code': bank_code,
                 'bdv_c2p_status': 'processing'
             })
 
-            # 2. Llamamos al método del modelo que ya creamos
+            # 2. C2P interbancario: la clave la genera el cliente en su banco.
+            # Solo se pide la clave al BDV cuando el pagador es cliente BDV (0102);
+            # para otros bancos el paymentkey del BDV envía una clave BDV que el
+            # banco del pagador rechaza con el código 1055.
+            if bank_code != '0102':
+                transaction.write({'bdv_c2p_status': 'otp_sent'})
+                transaction._bdv_c2p_log_stage(
+                    "GENERATE OTP · CLAVE DEL CLIENTE (sin paymentkey BDV)",
+                    request_payload={
+                        'customerDocumentId': customer_document_id,
+                        'customerNumberInstrument': customer_phone,
+                        'customerBankCode': bank_code,
+                    },
+                )
+                _logger.info(
+                    "[BDV C2P OTP] Banco %s: no se solicita clave al BDV; "
+                    "el cliente genera su clave C2P en su banco.", bank_code
+                )
+                return {
+                    'success': True,
+                    'otp_sent': False,
+                    'message': self._bestpay_c2p_client_key_message(),
+                    'status': 'otp_sent',
+                    'bank_code': bank_code,
+                }
+
+            # 3. Cliente BDV: el banco envía la clave al teléfono.
             result = transaction.bdv_c2p_generate_otp()
-            
+
             return {
                 'success': True,
+                'otp_sent': True,
                 'message': result.get('message', 'OTP enviado correctamente. Revise su teléfono.'),
-                'status': transaction.bdv_c2p_status
+                'status': transaction.bdv_c2p_status,
+                'bank_code': bank_code,
             }
 
         except UserError as e:
@@ -611,8 +706,10 @@ class BestpayBDVController(http.Controller):
             return {'success': False, 'error': 'Faltan datos obligatorios (uuid_hash u OTP).'}
 
         otp_clean = str(otp).strip()
-        if not otp_clean.isdigit() or not (4 <= len(otp_clean) <= 10):
-            return {'success': False, 'error': 'El código OTP no es válido.'}
+        # La clave C2P de otros bancos puede ser alfanumérica; la validación
+        # definitiva la hace el banco. Solo se filtra longitud y caracteres.
+        if not re.fullmatch(r'[A-Za-z0-9]{4,10}', otp_clean):
+            return {'success': False, 'error': 'El código ingresado no es válido.'}
 
         transaction = request.env['payment.transaction'].sudo().search([('uuid_hash', '=', uuid_hash)], limit=1)
         if not transaction.exists() or transaction.provider_id.code != 'bdv':
@@ -625,6 +722,15 @@ class BestpayBDVController(http.Controller):
                 "[BDV C2P Process] Bloqueado para Tx %s (estado: %s): %s",
                 transaction.reference, transaction.state, unavailable_reason
             )
+            # Si el cobro ya se completó (doble envío o página desactualizada),
+            # el navegador debe ir al comprobante en vez de mostrar un error.
+            if transaction.state == 'done':
+                return {
+                    'success': True,
+                    'message': 'Este pago ya fue procesado exitosamente.',
+                    'redirect_url': f"/pago/bdv/checkout?hash={uuid_hash}",
+                    'end_to_end_id': transaction.bdv_c2p_end_to_end_id,
+                }
             return {'success': False, 'error': unavailable_reason}
 
         # El cobro solo se permite si el OTP fue solicitado previamente.
@@ -632,6 +738,14 @@ class BestpayBDVController(http.Controller):
             return {
                 'success': False,
                 'error': 'Primero debes solicitar el código OTP para esta transacción.'
+            }
+
+        # Clave C2P interbancaria: el banco exige exactamente 8 dígitos.
+        # Se valida aquí para no gastar una llamada al banco con una clave inválida.
+        if (transaction.bdv_c2p_customer_bank_code or '0102') != '0102' and not re.fullmatch(r'\d{8}', otp_clean):
+            return {
+                'success': False,
+                'error': 'La clave C2P debe tener 8 dígitos.',
             }
 
         try:
@@ -645,14 +759,16 @@ class BestpayBDVController(http.Controller):
             result = transaction.bdv_c2p_process_payment()
             
             if result.get('success'):
-                # Generamos la URL de éxito para que el frontend redirija o renderice
+                # Redirección relativa: no depende de que web.base.url apunte al
+                # host público por el que está navegando el cliente.
+                redirect_path = f"/pago/bdv/checkout?hash={uuid_hash}"
                 base_url = request.env['ir.config_parameter'].sudo().get_param('web.base.url')
-                success_url = f"{base_url}/pago/bdv/checkout?hash={uuid_hash}&status=success"
-                
                 return {
                     'success': True,
                     'message': 'Pago aprobado exitosamente.',
-                    'payment_link': success_url,
+                    'redirect_url': redirect_path,
+                    'payment_link': f"{base_url}{redirect_path}",
+                    'reference': transaction.bdv_c2p_reference_generated or transaction.reference,
                     'end_to_end_id': transaction.bdv_c2p_end_to_end_id
                 }
             else:
@@ -661,9 +777,11 @@ class BestpayBDVController(http.Controller):
                 # que el cliente pueda reintentar con un OTP válido.
                 if transaction.bdv_c2p_end_to_end_id:
                     transaction.bdv_c2p_annul()
+                error_code = str(result.get('code') or '')
                 return {
                     'success': False,
-                    'error': result.get('message', 'El banco rechazó el pago.')
+                    'code': error_code,
+                    'error': self._bestpay_c2p_bank_error(error_code, result.get('message')),
                 }
 
         except UserError as e:
@@ -679,8 +797,49 @@ class BestpayBDVController(http.Controller):
             except Exception:
                 pass
             return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}
-    
-        # =====================================================
+
+    # =====================================================
+    # 6.1 API C2P: CONSULTA DE ESTADO (Reconciliación del checkout)
+    # =====================================================
+    @http.route('/api/bestpay/v1/c2p/status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    def c2p_status(self, uuid_hash=None, **kw):
+        """
+        Consulta de solo lectura del estado del cobro C2P.
+
+        El checkout la usa para reconciliar cuando la respuesta del banco no
+        llegó (timeout, corte de red, proxy) o cuando el cliente reenvía el OTP.
+        No ejecuta auto-match de notificaciones ni ningún otro efecto lateral.
+        """
+        if not uuid_hash:
+            return {'status': 'error', 'message': 'Falta el identificador de la transacción.'}
+
+        transaction = request.env['payment.transaction'].sudo().search(
+            [('uuid_hash', '=', uuid_hash)], limit=1
+        )
+        if not transaction.exists() or transaction.provider_id.code != 'bdv':
+            return {'status': 'error', 'message': 'Transacción no válida.'}
+
+        # Lectura fresca: el cobro pudo confirmarse en otro worker/proceso.
+        transaction.invalidate_recordset([
+            'state', 'bdv_c2p_status',
+            'bdv_c2p_end_to_end_id', 'bdv_c2p_reference_generated',
+        ])
+
+        if transaction.state == 'done':
+            return {
+                'status': 'done',
+                'message': 'Pago completado con éxito.',
+                'redirect_url': f"/pago/bdv/checkout?hash={uuid_hash}",
+                'end_to_end_id': transaction.bdv_c2p_end_to_end_id,
+            }
+
+        return {
+            'status': 'pending' if transaction.state in ('draft', 'pending') else transaction.state,
+            'message': 'El pago aún no ha sido confirmado.',
+            'c2p_status': transaction.bdv_c2p_status,
+        }
+
+    # =====================================================
     # 7. API CONSULTA DE MOVIMIENTOS BDV (Proxy para E-commerce)
     # =====================================================
     @http.route('/api/bestpay/v1/bdv/consulta/movimientos', type='jsonrpc', auth='none', methods=['POST'], csrf=False)

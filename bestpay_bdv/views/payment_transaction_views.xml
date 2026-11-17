@@ -27,6 +27,9 @@
                         <field name="bdv_hora_pago" readonly="1"/>
                     </group>
                 </group>
+                <group string="🔗 Retorno al Tercero (BDV)" invisible="provider_code != 'bdv'">
+                    <field name="bdv_return_url_3ro" readonly="1"/>
+                </group>
             </xpath>
         </field>
     </record>

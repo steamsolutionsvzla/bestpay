@@ -27,7 +27,7 @@
                                 invisible="state not in ('draft', 'pending')"/>
                     </div>
                     <group string="Montos ofrecidos históricamente">
-                        <field name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
+                        <field colspan="2" name="mercantil_offered_amount_history" readonly="1" nolabel="1" widget="ace" options="{'mode': 'javascript'}"/>
                     </group>
                     <field name="mercantil_search_ids" nolabel="1">
                         <list create="0" delete="0" edit="0">
