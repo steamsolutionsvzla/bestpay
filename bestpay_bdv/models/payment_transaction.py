@@ -262,54 +262,133 @@ class PaymentTransactionBDV(models.Model):
                 headers=headers,
                 timeout=15,
             )
-            response.raise_for_status()
-            respuesta = response.json()
-            _logger.info(f"[BDV] Respuesta recibida: {respuesta}")
-
-            # 5. Guardar la respuesta cruda
-            self.bank_in_log = json.dumps(respuesta, indent=2, ensure_ascii=False)
-
-            # 6. Procesar el código de respuesta del BDV
-            code = respuesta.get("code")
-            message = respuesta.get("message", "")
-
-            if code == 1000:
-                # ✅ PAGO APROBADO
-                self.write({
-                    'bdv_conciliation_state': 'approved',
-                    'bdv_conciliation_message': message,
-                    'state': 'done',
-                })
-                _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
-                self._bestpay_trigger_webhook_3ro()
-                return True
-            elif code == 1010:
-                # ❌ PAGO RECHAZADO
-                self.write({
-                    'bdv_conciliation_state': 'rejected',
-                    'bdv_conciliation_message': message,
-                    'state': 'cancel',
-                })
-                _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {message}")
-                return False
-            else:
-                # ⚠️ CÓDIGO DESCONOCIDO
-                self.write({
-                    'bdv_conciliation_state': 'error',
-                    'bdv_conciliation_message': f"Código inesperado: {code} - {message}",
-                })
-                _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
-                return False
-
+        except requests.exceptions.Timeout:
+            mensaje = 'El BDV tardó demasiado en responder. Intenta nuevamente.'
+            _logger.error(f"[BDV] Timeout en conciliación TX {self.id}")
+            self.write({
+                'bdv_conciliation_state': 'error',
+                'bdv_conciliation_message': mensaje,
+                'state': 'error',
+            })
+            raise UserError(mensaje)
         except requests.exceptions.RequestException as e:
-            _logger.error(f"[BDV] Error de conexión: {str(e)}")
+            mensaje = 'No se pudo conectar con el BDV. Intenta nuevamente.'
+            _logger.error(f"[BDV] Error de conexión en TX {self.id}: {str(e)}")
             self.write({
                 'bdv_conciliation_state': 'error',
                 'bdv_conciliation_message': f"Error de conexión: {str(e)}",
                 'state': 'error',
             })
-            raise UserError(f"Error de conexión con el BDV: {str(e)}")
-    
+            raise UserError(mensaje)
+
+        # 5. Guardar la respuesta cruda (incluye el cuerpo de los errores HTTP)
+        try:
+            respuesta = response.json()
+        except ValueError:
+            respuesta = {'raw': (response.text or '')[:2000]}
+
+        _logger.info(f"[BDV] Respuesta recibida (HTTP {response.status_code}): {respuesta}")
+        self.bank_in_log = json.dumps(respuesta, indent=2, ensure_ascii=False)
+
+        # 6. Errores HTTP (400, 401, 404, 5xx, etc.)
+        if not response.ok:
+            mensaje = self._bdv_conciliation_http_error(response.status_code, respuesta)
+            _logger.error(f"[BDV] HTTP {response.status_code} en TX {self.id}: {mensaje}")
+            self.write({
+                'bdv_conciliation_state': 'error',
+                'bdv_conciliation_message': mensaje,
+                'state': 'error',
+            })
+            raise UserError(mensaje)
+
+        # 7. Procesar el código de respuesta del BDV
+        code = str(respuesta.get("code") or '')
+        message = respuesta.get("message", "")
+
+        if code == '1000':
+            # ✅ PAGO APROBADO
+            self.write({
+                'bdv_conciliation_state': 'approved',
+                'bdv_conciliation_message': message,
+                'state': 'done',
+            })
+            _logger.info(f"[BDV] ✅ TX {self.id} APROBADA por el BDV")
+            self._bestpay_trigger_webhook_3ro()
+            return True
+        elif code == '1010':
+            # ❌ PAGO RECHAZADO / DATOS INVÁLIDOS / YA CONCILIADO
+            # La doc del BDV usa el mismo código para todos los casos; el detalle
+            # viene en `data` (Campo X invalido) o en `message`.
+            mensaje = self._bdv_conciliation_error_message(respuesta)
+            self.write({
+                'bdv_conciliation_state': 'rejected',
+                'bdv_conciliation_message': mensaje,
+                'state': 'cancel',
+            })
+            _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {mensaje}")
+            return False
+        else:
+            # ⚠️ CÓDIGO DESCONOCIDO
+            mensaje = f"Código inesperado: {code} - {message}"
+            self.write({
+                'bdv_conciliation_state': 'error',
+                'bdv_conciliation_message': mensaje,
+            })
+            _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
+            return False
+
+    # Mensajes de la API de Conciliación del BDV.
+    # Todos los rechazos de negocio llegan con code 1010; el detalle real viene
+    # en `data` ("Campo X invalido") o en `message` (ya conciliado, monto, etc.).
+    _BDV_CONCILIATION_FIELD_ERRORS = {
+        'Campo FechaPago invalido': 'La fecha del pago no es válida.',
+        'Campo CedulaPagador invalido': 'La cédula del pagador no es válida.',
+        'Campo TelefonoPagador invalido': 'El teléfono del pagador no es válido.',
+        'Campo TelefonoDestino invalido': 'El teléfono destino del comercio no es válido.',
+        'Campo Referencia invalido': 'El número de referencia no es válido (debe tener entre 4 y 12 dígitos).',
+        'Campo Importe invalido': 'El importe del pago no es válido.',
+        'Campo BancoOrigen invalido': 'El banco de origen no es válido.',
+    }
+
+    def _bdv_conciliation_error_message(self, respuesta):
+        """Traduce el código 1010 del BDV a un mensaje claro para el cliente."""
+        message = str(respuesta.get('message') or '').strip()
+        data_key = ' '.join(str(respuesta.get('data') or '').split())
+
+        if data_key in self._BDV_CONCILIATION_FIELD_ERRORS:
+            return self._BDV_CONCILIATION_FIELD_ERRORS[data_key]
+
+        lower = message.lower()
+        if 'ya fue conciliado' in lower:
+            return 'Este pago ya fue conciliado anteriormente.'
+        if 'no afiliado al producto' in lower:
+            return 'La API Key del comercio no está afiliada al servicio de conciliación del BDV.'
+        if lower.startswith('monto:') and 'transacc' in lower and 'realizada' in lower:
+            return 'El monto reportado no coincide con el pago realizado.'
+        if 'no existe' in lower:
+            return ('No se encontró un pago con esos datos. Verifica referencia, '
+                    'teléfono, cédula, monto y fecha.')
+
+        return message or 'No se pudo validar el pago con el BDV.'
+
+    def _bdv_conciliation_http_error(self, status_code, respuesta):
+        """Mensaje para los errores HTTP de la API de Conciliación."""
+        body = respuesta if isinstance(respuesta, dict) else {}
+        text = str(body.get('message') or body.get('error') or body.get('raw') or '')
+
+        if 'no Route matched' in text:
+            return 'La URL del servicio de conciliación del BDV no es correcta.'
+        if status_code == 400:
+            return ('El banco rechazó los datos del pago (formato inválido). '
+                    'Verifica teléfono, cédula, referencia y fecha.')
+        if status_code in (401, 403):
+            return 'La API Key del comercio no es válida o no tiene permisos para conciliar.'
+        if status_code == 404:
+            return 'El servicio de conciliación del BDV no está disponible (URL incorrecta).'
+        if status_code >= 500:
+            return 'El BDV no está disponible en este momento. Intenta más tarde.'
+        return f'Error del BDV al conciliar el pago (HTTP {status_code}).'
+
     @api.model_create_multi
     def create(self, vals_list):
         """

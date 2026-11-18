@@ -98,17 +98,25 @@
                                                 Monto a Cancelar
                                             </p>
                                          <!-- Mostrar monto en Bs usando amount_ves calculado por Wilson -->
-                                        <h2 class="amount-value mb-2">
-                                            <t t-if="transaction.amount_ves">
-                                                <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/>
-                                                <span style="font-size: 1rem; vertical-align: super;">Bs</span>
-                                            </t>
-                                            <t t-else="">
-                                                <!-- Fallback de seguridad -->
-                                                <t t-esc="'%.2f' % transaction.amount"/>
-                                                <t t-esc="transaction.currency_id.name"/>
-                                            </t>
-                                        </h2>
+                                        <div class="text-center mb-2">
+                                            <div class="position-relative d-inline-block">
+                                                <h2 class="amount-value mb-0" id="bpMontoTop">
+                                                    <t t-if="transaction.amount_ves">
+                                                        <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/>
+                                                        <span style="font-size: 1rem; vertical-align: super;">Bs</span>
+                                                    </t>
+                                                    <t t-else="">
+                                                        <!-- Fallback de seguridad -->
+                                                        <t t-esc="'%.2f' % transaction.amount"/>
+                                                        <t t-esc="transaction.currency_id.name"/>
+                                                    </t>
+                                                </h2>
+                                                <button type="button" class="btn btn-outline-primary btn-sm position-absolute top-50 start-100 translate-middle-y ms-2" onclick="bpCopiarMonto('bpMontoTop')" title="Copiar monto" aria-label="Copiar monto"
+                                                        style="border:2px solid #0033a0; background:white; color:#0033a0; padding:3px 7px; font-size:12px;">
+                                                    <i class="fa fa-copy"></i>
+                                                </button>
+                                            </div>
+                                        </div>
                                         <t t-if="transaction.exchange_rate_bcv">
                                             <p class="text-muted small mb-0 mt-1">
                                                 <i class="fa fa-info-circle me-1"></i>
@@ -159,10 +167,18 @@
                                                             <div class="bg-light rounded p-4 mb-4 text-center" 
                                                                  style="border:2px solid #e9ecef; box-shadow:inset 0 2px 4px rgba(0,0,0,0.05);">
                                                                 <p class="text-muted small text-uppercase fw-bold mb-2">Monto a Pagar</p>
-                                                                <h2 class="text-success mb-0" style="font-size:2.8rem; font-weight:800;">
-                                                                    <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> 
-                                                                    <span style="font-size:1.2rem; vertical-align:super; color:#28a745;">Bs</span>
-                                                                </h2>
+                                                                <div class="text-center">
+                                                                    <div class="position-relative d-inline-block">
+                                                                        <h2 class="text-success mb-0" id="bpMontoModal" style="font-size:2.8rem; font-weight:800;">
+                                                                            <t t-esc="'{:,.2f}'.format(transaction.amount_ves).replace(',', 'X').replace('.', ',').replace('X', '.')"/> 
+                                                                            <span style="font-size:1.2rem; vertical-align:super; color:#28a745;">Bs</span>
+                                                                        </h2>
+                                                                        <button type="button" class="btn btn-outline-primary btn-sm position-absolute top-50 start-100 translate-middle-y ms-2" onclick="bpCopiarMonto('bpMontoModal')" title="Copiar monto" aria-label="Copiar monto"
+                                                                                style="border:2px solid #0033a0; background:white; color:#0033a0; padding:3px 7px; font-size:12px;">
+                                                                            <i class="fa fa-copy"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
                                                                 <t t-if="transaction.exchange_rate_bcv">
                                                                     <p class="text-muted small mt-2 mb-0">
                                                                         <i class="fa fa-info-circle me-1"></i>
@@ -326,7 +342,7 @@
                                             </div>
 
                                         <!-- Formulario de Pago Móvil -->
-                                        <form action="/pago/bdv/procesar" method="post">
+                                        <form action="/pago/bdv/procesar" method="post" id="bp-pago-movil-form" novalidate="1">
                                             <input type="hidden" name="hash" t-att-value="hash"/>
 
                                             <h5 class="text-muted mb-3 fw-bold">
@@ -391,7 +407,7 @@
                                                            name="telefono" 
                                                            placeholder="4121234567" 
                                                            maxlength="11" 
-                                                           pattern="[0-9]{10,11}"
+                                                           pattern="0?[0-9]{10}"
                                                            inputmode="numeric"
                                                            required="1"/>
                                                 </div>
@@ -402,12 +418,14 @@
                                             <div class="mb-3">
                                                 <label class="form-label">Número de Referencia</label>
                                                 <input type="text" 
-                                                       class="form-control" 
+                                                       class="form-control bp-digits" 
                                                        name="referencia" 
-                                                       placeholder="Últimos 6-8 dígitos de la referencia" 
-                                                       maxlength="10"
+                                                       placeholder="Referencia (4 a 12 dígitos)" 
+                                                       maxlength="12"
+                                                       pattern="[0-9]{4,12}"
+                                                       inputmode="numeric"
                                                        required="1"/>
-                                                <small class="text-muted">Lo encuentras en tu comprobante de pago móvil</small>
+                                                <small class="text-muted">Entre 4 y 12 dígitos, como aparece en tu comprobante</small>
                                             </div>
                                             
                                             <!-- Fecha del Pago -->
@@ -474,6 +492,13 @@
                             textoCompleto += "Banco: " + (banco ? banco.value : '');
                             
                             bpCopiarAlPortapapeles(textoCompleto, 'datos de Pago Móvil');
+                        }
+
+                        function bpCopiarMonto(elementId) {
+                            var el = document.getElementById(elementId);
+                            if (el) {
+                                bpCopiarAlPortapapeles(el.textContent.replace(/\s+/g, ' ').trim(), 'monto');
+                            }
                         }
 
                         function bpCopiarAlPortapapeles(texto, descripcion) {
@@ -659,6 +684,62 @@ function bpConsultarEstadoNotificacion() {
                                 bpEnableDigitsOnly();
                             }
                         })();
+
+                        // Validaciones de formato del pago móvil antes de enviarlo al banco.
+                        (function(){
+                            var form = document.getElementById('bp-pago-movil-form');
+                            if (!form) { return; }
+                            var tel = form.querySelector('input[name="telefono"]');
+                            var ced = form.querySelector('input[name="cedula"]');
+                            var ref = form.querySelector('input[name="referencia"]');
+                            var fecha = form.querySelector('input[name="fecha_pago"]');
+                            var fields = [tel, ced, ref, fecha].filter(function(el){ return !!el; });
+
+                            fields.forEach(function(el){
+                                el.addEventListener('input', function(){ this.setCustomValidity(''); });
+                            });
+
+                            form.addEventListener('submit', function(e){
+                                fields.forEach(function(el){ el.setCustomValidity(''); });
+                                var invalid = null;
+
+                                var telefono = (tel.value || '').replace(/\s/g, '');
+                                if (!/^0?\d{10}$/.test(telefono)) {
+                                    tel.setCustomValidity('Teléfono inválido: 10 dígitos sin el 0 inicial (ej: 4121234567).');
+                                    invalid = invalid || tel;
+                                }
+
+                                var cedula = (ced.value || '').replace(/\s/g, '');
+                                if (!/^\d{6,10}$/.test(cedula)) {
+                                    ced.setCustomValidity('Cédula inválida: entre 6 y 10 dígitos.');
+                                    invalid = invalid || ced;
+                                }
+
+                                var referencia = (ref.value || '').replace(/\s/g, '');
+                                if (!/^\d{4,12}$/.test(referencia)) {
+                                    ref.setCustomValidity('Referencia inválida: entre 4 y 12 dígitos.');
+                                    invalid = invalid || ref;
+                                }
+
+                                if (!fecha.value) {
+                                    fecha.setCustomValidity('Indica la fecha del pago.');
+                                    invalid = invalid || fecha;
+                                } else {
+                                    var hoy = new Date();
+                                    hoy.setHours(0, 0, 0, 0);
+                                    var pago = new Date(fecha.value + 'T00:00:00');
+                                    if (pago > hoy) {
+                                        fecha.setCustomValidity('La fecha del pago no puede ser futura.');
+                                        invalid = invalid || fecha;
+                                    }
+                                }
+
+                                if (invalid) {
+                                    e.preventDefault();
+                                    invalid.reportValidity();
+                                }
+                            });
+                        })();
 //]]>
                     </script>
                 </body>
@@ -743,6 +824,16 @@ function bpConsultarEstadoNotificacion() {
                                         <t t-elif="status == 'expired'">
                                             <i class="fa fa-hourglass-half result-icon expired-icon"></i>
                                             <h2 class="expired-title mb-3">Link Expirado</h2>
+                                            <p class="lead text-muted mb-4"><t t-esc="message"/></p>
+                                        </t>
+                                        <t t-elif="status == 'error'">
+                                            <i class="fa fa-exclamation-circle result-icon expired-icon"></i>
+                                            <h2 class="expired-title mb-3">Pago no procesado</h2>
+                                            <p class="lead text-muted mb-4"><t t-esc="message"/></p>
+                                        </t>
+                                        <t t-elif="status == 'invalid'">
+                                            <i class="fa fa-info-circle result-icon" style="color:#0033a0;"></i>
+                                            <h2 class="mb-3" style="color:#0033a0;">Revisa los datos del pago</h2>
                                             <p class="lead text-muted mb-4"><t t-esc="message"/></p>
                                         </t>
                                         <t t-else="">

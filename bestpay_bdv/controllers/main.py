@@ -57,7 +57,7 @@ class BestpayBDVController(http.Controller):
         """
         retry_url = False
         if (
-            status == 'rejected'
+            status in ('rejected', 'invalid')
             and transaction.payment_method_id.code != 'bdv_c2p'
             and transaction.uuid_hash
         ):
@@ -279,15 +279,43 @@ class BestpayBDVController(http.Controller):
             return self._bestpay_expired_link_response(transaction)
 
         # Mapear datos del formulario a los campos del modelo
-        cedula_raw = post.get('cedula', '')
+        cedula_raw = (post.get('cedula') or '').strip()
         tipo_cedula = post.get('tipo_cedula', 'V')
         cedula = f"{tipo_cedula}{cedula_raw}"
 
-        telefono_raw = post.get('telefono', '')
+        telefono_raw = (post.get('telefono') or '').strip()
         if telefono_raw and not telefono_raw.startswith('0'):
             telefono_pagador = f"0{telefono_raw}"
         else:
             telefono_pagador = telefono_raw
+
+        # Validaciones según la documentación de la API de Conciliación:
+        # teléfono de 10 dígitos (sin 0) o 11 con el 0, cédula 6-10 dígitos y
+        # referencia de 4 a 12 dígitos. Evita enviar al banco datos con formato
+        # inválido (HTTP 400 / 1010 "Campo ... invalido").
+        # Son errores de datos, no un pago rechazado por el banco: se muestra
+        # la pantalla "Revisa los datos", no "Pago Rechazado".
+        if not re.fullmatch(r'0\d{10}', telefono_pagador or ''):
+            return self._bestpay_render_result(
+                transaction,
+                'invalid',
+                'El teléfono del pagador debe tener 10 dígitos sin el 0 inicial (ej: 4121234567).',
+            )
+
+        if not re.fullmatch(r'\d{6,10}', cedula_raw):
+            return self._bestpay_render_result(
+                transaction,
+                'invalid',
+                'La cédula del pagador no es válida (debe tener entre 6 y 10 dígitos).',
+            )
+
+        referencia_raw = (post.get('referencia') or '').strip()
+        if not re.fullmatch(r'\d{4,12}', referencia_raw):
+            return self._bestpay_render_result(
+                transaction,
+                'invalid',
+                'El número de referencia debe tener entre 4 y 12 dígitos, como aparece en tu comprobante.',
+            )
 
         # =====================================================
         # LÓGICA DE MONTO: QA (Hardcodeado) vs PRODUCCIÓN (Real)
@@ -330,24 +358,38 @@ class BestpayBDVController(http.Controller):
             dias_diferencia = (hoy - fecha_pago).days
             
             if dias_diferencia < 0:
-                raise UserError("La fecha del pago no puede ser futura.")
+                return self._bestpay_render_result(
+                    transaction,
+                    'invalid',
+                    'La fecha del pago no puede ser futura.',
+                )
             
             # La regla estricta de 3 días SOLO aplica en PRODUCCIÓN.
             # En QA, el banco exige usar fechas específicas de prueba (ej: 02/12/2023).
             if env_type != 'qa' and dias_diferencia > 3:
-                raise UserError("El BDV solo permite conciliar pagos de los últimos 3 días. "
-                              f"Fecha del pago: {fecha_pago.strftime('%d/%m/%Y')}. "
-                              f"Hoy es: {hoy.strftime('%d/%m/%Y')}.")
+                return self._bestpay_render_result(
+                    transaction,
+                    'invalid',
+                    'El BDV solo permite conciliar pagos de los últimos 3 días. '
+                    f"Fecha del pago: {fecha_pago.strftime('%d/%m/%Y')}. "
+                    f"Hoy es: {hoy.strftime('%d/%m/%Y')}.",
+                )
             
             _logger.info(f"[BDV] Fecha del pago validada: {fecha_pago} ({dias_diferencia} días atrás) - Ambiente: {env_type.upper()}")
             
         except ValueError:
-            raise UserError("Formato de fecha inválido. Use el formato AAAA-MM-DD.")
-        except UserError:
-            raise
+            return self._bestpay_render_result(
+                transaction,
+                'invalid',
+                'Indica una fecha de pago válida.',
+            )
         except Exception as e:
             _logger.error(f"[BDV] Error procesando fecha: {str(e)}")
-            raise UserError("Error al procesar la fecha del pago.")
+            return self._bestpay_render_result(
+                transaction,
+                'invalid',
+                'No se pudo leer la fecha del pago. Verifícala e intenta de nuevo.',
+            )
         # =====================================================
 
         # Actualizar la transacción con los datos del pagador y el monto determinado
@@ -355,7 +397,7 @@ class BestpayBDVController(http.Controller):
             'bdv_cedula_pagador': cedula,
             'bdv_telefono_pagador': telefono_pagador,
             'bdv_banco_origen': post.get('banco', '0102'),
-            'bdv_referencia': post.get('referencia', ''),
+            'bdv_referencia': referencia_raw,
             'bdv_fecha_pago': fecha_pago,  # ← AHORA USA LA FECHA DEL FORMULARIO
             'bdv_importe': importe_float,
         })
@@ -383,11 +425,24 @@ class BestpayBDVController(http.Controller):
                     '¡Pago aprobado exitosamente por el Banco de Venezuela!',
                 )
             else:
-                return self._bestpay_render_result(
-                    transaction,
-                    'rejected',
-                    f"Pago rechazado: {transaction.bdv_conciliation_message or 'Revise los datos e intente nuevamente.'}",
+                mensaje = (
+                    transaction.bdv_conciliation_message
+                    or 'No se pudo validar el pago. Revisa los datos e intenta nuevamente.'
                 )
+                # Si el problema son los datos (campo inválido, monto distinto o
+                # pago no encontrado), mostrar "Revisa los datos" en vez de la
+                # alarmante pantalla "Pago Rechazado".
+                if mensaje == 'La API Key del comercio no está afiliada al servicio de conciliación del BDV.':
+                    return self._bestpay_render_result(transaction, 'error', mensaje)
+
+                datos_invalidos = set(transaction._BDV_CONCILIATION_FIELD_ERRORS.values())
+                datos_invalidos.update({
+                    'El monto reportado no coincide con el pago realizado.',
+                    'No se encontró un pago con esos datos. Verifica referencia, '
+                    'teléfono, cédula, monto y fecha.',
+                })
+                status = 'invalid' if mensaje in datos_invalidos else 'rejected'
+                return self._bestpay_render_result(transaction, status, mensaje)
 
         except UserError as e:
             _logger.error(f"[BDV] Error de usuario: {str(e)}")

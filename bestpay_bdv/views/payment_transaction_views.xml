@@ -7,7 +7,7 @@
         <field name="inherit_id" ref="bestpay.view_payment_transaction_form_bestpay"/>
 <field name="arch" type="xml">
             <xpath expr="//sheet" position="inside">
-                <group string="🏦 Notificación Bancaria BDV" invisible="provider_code != 'bdv'">
+                <group string="🏦 Conciliación BDV" invisible="provider_code != 'bdv'">
                     <group>
                         <field name="bank_notification_id" options="{'no_create': True}"/>
                         <field name="bdv_conciliation_state" widget="badge" 
@@ -16,15 +16,19 @@
                                decoration-warning="bdv_conciliation_state in ('sent', 'draft')"
                                decoration-muted="bdv_conciliation_state == 'error'"/>
                         <field name="bdv_conciliation_message" readonly="1" invisible="not bdv_conciliation_message"/>
+                        <field name="bdv_hora_pago" readonly="1"/>
+                    </group>
+                </group>
+                <group string="📝 Datos del Pago Reportado por el Cliente" invisible="provider_code != 'bdv'">
+                    <group>
                         <field name="bdv_referencia" readonly="1"/>
                         <field name="bdv_importe" readonly="1"/>
+                        <field name="bdv_fecha_pago" readonly="1"/>
                     </group>
                     <group>
                         <field name="bdv_telefono_pagador" readonly="1"/>
                         <field name="bdv_cedula_pagador" readonly="1"/>
                         <field name="bdv_banco_origen" readonly="1"/>
-                        <field name="bdv_fecha_pago" readonly="1"/>
-                        <field name="bdv_hora_pago" readonly="1"/>
                     </group>
                 </group>
                 <group string="🔗 Retorno al Tercero (BDV)" invisible="provider_code != 'bdv'">
