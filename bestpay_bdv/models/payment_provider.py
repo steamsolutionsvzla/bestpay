@@ -3,6 +3,8 @@ import logging
 import requests  # <-- Esto va SEPARADO, es una librería de Python
 from odoo import api, fields, models
 
+from odoo.addons.bestpay.utils.business_logger import log_business_error
+
 _logger = logging.getLogger(__name__)
 
 
@@ -116,6 +118,29 @@ class PaymentProviderBDV(models.Model):
             # PRODUCCIÓN: Usar la API Key general de producción (la misma para todas las APIs)
             api_key = getattr(partner, 'bdv_api_key_prod', '') if partner else ''
             if not api_key:
+                log_business_error(
+                    self.env,
+                    'bdv_consultar_movimientos',
+                    input_data={
+                        'partner': partner.name if partner else False,
+                        'ambiente': env_type,
+                    },
+                    output_data=(
+                        'Falta la API Key de Producción del BDV en el comercio '
+                        '%s; no se pudo consultar movimientos.'
+                        % (partner.name if partner else '-')
+                    ),
+                    is_error=True,
+                    error_type='BDVMissingMovementsApiKey',
+                    dedupe_key='bdv_movements_missing_key:%s' % (
+                        partner.id if partner else 0),
+                    dedupe_minutes=60,
+                    meta={
+                        'proveedor': 'bdv',
+                        'cliente': partner.name if partner else False,
+                        'ambiente': env_type,
+                    },
+                )
                 return {
                     'success': False, 
                     'code': '9999', 
@@ -156,6 +181,24 @@ class PaymentProviderBDV(models.Model):
             # Si hay error HTTP, leemos la respuesta REAL del banco
             if not response.ok:
                 _logger.error(f"🚨 [BDV MOVIMIENTOS] Error HTTP {response.status_code}. Respuesta REAL: {response.text}")
+                log_business_error(
+                    self.env,
+                    'bdv_consultar_movimientos',
+                    input_data={'url': url, 'http_status': response.status_code},
+                    output_data=(
+                        'El BDV rechazó la consulta de movimientos con HTTP %s: %s'
+                        % (response.status_code, (response.text or '')[:500])
+                    ),
+                    is_error=True,
+                    error_type='BDVMovementsHttpError',
+                    dedupe_key='bdv_movements_http:%s' % response.status_code,
+                    dedupe_minutes=15,
+                    meta={
+                        'proveedor': 'bdv',
+                        'http_status': response.status_code,
+                        'url': url,
+                    },
+                )
                 return {
                     'success': False, 
                     'code': str(response.status_code), 
@@ -174,8 +217,37 @@ class PaymentProviderBDV(models.Model):
                     'last_nro_movimiento': data.get('movs', [])[-1].get('nroMov') if data.get('movs') else '',
                 }
             else:
+                log_business_error(
+                    self.env,
+                    'bdv_consultar_movimientos',
+                    input_data={'codigo': respuesta.get('code')},
+                    output_data=(
+                        'El BDV no devolvió movimientos (código %s): %s'
+                        % (respuesta.get('code'), respuesta.get('message'))
+                    ),
+                    is_error=False,
+                    meta={
+                        'proveedor': 'bdv',
+                        'codigo': respuesta.get('code'),
+                    },
+                )
                 return {'success': False, 'code': respuesta.get('code'), 'message': respuesta.get('message')}
                 
         except Exception as e:
             _logger.error(f"[BDV MOVIMIENTOS] Error de conexión inesperado: {str(e)}")
+            log_business_error(
+                self.env,
+                'bdv_consultar_movimientos',
+                input_data={'url': url},
+                output_data='Error de conexión consultando movimientos del BDV: %s' % e,
+                exc=e,
+                is_error=True,
+                dedupe_key='bdv_movements_exception',
+                dedupe_minutes=15,
+                meta={
+                    'proveedor': 'bdv',
+                    'ambiente': env_type,
+                    'url': url,
+                },
+            )
             return {'success': False, 'code': '9999', 'message': f'Error de conexión: {str(e)}'}

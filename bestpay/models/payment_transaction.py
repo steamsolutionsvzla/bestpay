@@ -5,7 +5,9 @@ import json
 import base64
 from datetime import timedelta
 from odoo import models, fields, api, _
-    
+
+from ..utils.business_logger import log_business_error
+
 _logger = logging.getLogger(__name__)
 
 class PaymentProvider(models.Model):
@@ -175,6 +177,17 @@ class PaymentTransaction(models.Model):
                     "[BESTPAY] TX %s: no se pudo programar el aviso de link vencido: %s",
                     self.id, e
                 )
+                log_business_error(
+                    self.env,
+                    '_bestpay_mark_as_unpaid',
+                    input_data={'tx': self.reference},
+                    output_data=(
+                        'No se pudo programar el aviso de link vencido: %s' % e
+                    ),
+                    exc=e,
+                    is_error=False,
+                    meta={'tx': self.reference},
+                )
         return True
 
     def _bestpay_schedule_unpaid_notification(self):
@@ -289,8 +302,25 @@ class PaymentTransaction(models.Model):
             rate_row = self.env['res.currency.rate'].search([
                 ('currency_id', '=', currency_ves.id)
             ], order='name desc', limit=1)
-            
-        return rate_row.rate if rate_row else 1.0
+
+        if not rate_row:
+            log_business_error(
+                self.env,
+                '_get_bcv_rate_or_fetch',
+                output_data=(
+                    'No hay ninguna tasa BCV disponible (ni la de hoy ni una '
+                    'histórica). Se usa 1.0 como respaldo y los montos pueden '
+                    'quedar incorrectos.'
+                ),
+                is_error=True,
+                error_type='BCVRateMissing',
+                dedupe_key='bestpay_bcv_no_rate',
+                dedupe_minutes=60,
+                meta={'servicio': 'BCV'},
+            )
+            return 1.0
+
+        return rate_row.rate
     
     def _bestpay_action_recalculate_jit_ves(self):
         """
@@ -324,6 +354,20 @@ class PaymentTransaction(models.Model):
         tasa_bcv_ves = latest_rate_ves.rate if latest_rate_ves else 0.0
 
         if tasa_bcv_ves <= 0:
+            log_business_error(
+                self.env,
+                '_bestpay_action_recalculate_jit_ves',
+                input_data={'tx': self.reference},
+                output_data=(
+                    'La tasa BCV disponible es 0; no se pudo recalcular el '
+                    'monto en VES de la transacción.'
+                ),
+                is_error=True,
+                error_type='BCVRateZero',
+                dedupe_key='bestpay_bcv_zero_rate',
+                dedupe_minutes=60,
+                meta={'servicio': 'BCV', 'tx': self.reference},
+            )
             return
 
         monto_original = self.amount
@@ -525,6 +569,7 @@ class PaymentTransaction(models.Model):
             ]
             txs = self.sudo().search(domain)
             count = 0
+            failed = 0
             for tx in txs:
                 try:
                     tx._bestpay_mark_as_unpaid(
@@ -533,9 +578,48 @@ class PaymentTransaction(models.Model):
                     )
                     count += 1
                 except Exception as e:
+                    failed += 1
                     _logger.error("[BESTPAY CRON][EXPIRE] Error expirando tx %s: %s", tx.id, e)
+                    log_business_error(
+                        self.env,
+                        '_cron_expire_pending_transactions',
+                        input_data={'tx': tx.reference},
+                        output_data='Error expirando la TX %s: %s' % (
+                            tx.reference, e),
+                        exc=e,
+                        is_error=False,
+                        meta={'tx': tx.reference},
+                    )
             _logger.info("[BESTPAY CRON][EXPIRE] %s transacciones pasadas a no_pagado (>%sh)", count, hours)
+
+            # Un solo aviso por barrido: los fallos individuales ya quedaron
+            # registrados arriba, sin despertar a nadie uno por uno.
+            if failed:
+                log_business_error(
+                    self.env,
+                    '_cron_expire_pending_transactions',
+                    input_data={'hours': hours},
+                    output_data=(
+                        'El cron de expiración falló en %s de %s transacciones '
+                        'revisadas.' % (failed, count + failed)
+                    ),
+                    is_error=True,
+                    error_type='CronExpireFailures',
+                    dedupe_key='bestpay_cron_expire_failures',
+                    dedupe_minutes=60,
+                    meta={'cron': 'expirar links', 'fallidas': failed},
+                )
             return count
         except Exception as e:
             _logger.error("[BESTPAY CRON][EXPIRE] Error general: %s", e)
+            log_business_error(
+                self.env,
+                '_cron_expire_pending_transactions',
+                output_data='Error general en el cron de expiración: %s' % e,
+                exc=e,
+                is_error=True,
+                dedupe_key='bestpay_cron_expire_general',
+                dedupe_minutes=30,
+                meta={'cron': 'expirar links'},
+            )
             return 0

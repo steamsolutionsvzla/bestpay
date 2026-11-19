@@ -8,6 +8,9 @@ from odoo import http, fields
 from odoo.http import request, Response
 from odoo.exceptions import UserError
 
+from odoo.addons.bestpay.utils.api_logger import api_call_logger
+from odoo.addons.bestpay.utils.business_logger import is_logged, log_business_error
+
 _logger = logging.getLogger(__name__)
 
 
@@ -128,6 +131,7 @@ class BestpayBDVController(http.Controller):
     # 2. WEB: FORMULARIO DE PAGO (Para el usuario final)
     # =====================================================
     @http.route('/pago/bdv/checkout', type='http', auth='none', website=False)
+    @api_call_logger
     def bdv_checkout(self, hash=None, **kw):
         if not hash:
             return request.not_found()
@@ -241,6 +245,7 @@ class BestpayBDVController(http.Controller):
     # 3. WEB: PROCESAR EL PAGO (Envío al BDV)
     # =====================================================
     @http.route('/pago/bdv/procesar', type='http', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def bdv_process_payment(self, **post):
         tx_hash = post.get('hash')
         if not tx_hash:
@@ -449,6 +454,17 @@ class BestpayBDVController(http.Controller):
             return self._bestpay_render_result(transaction, 'error', str(e))
         except Exception as e:
             _logger.error(f"[BDV] Error inesperado: {str(e)}")
+            if not is_logged(e):
+                log_business_error(
+                    request.env,
+                    'bdv_process_payment',
+                    input_data={'tx': transaction.reference, 'hash': tx_hash},
+                    output_data='Error inesperado procesando el pago BDV: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={'proveedor': 'bdv', 'tx': transaction.reference},
+                )
             return self._bestpay_render_result(
                 transaction,
                 'error',
@@ -460,6 +476,7 @@ class BestpayBDVController(http.Controller):
     # 4. WEBHOOK: NOTIFICACIÓN DEL BANCO (Server-to-Server)
     # =====================================================
     @http.route('/api/bestpay/v1/webhook/bdv', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
+    @api_call_logger
     def bdv_webhook_notify(self, **post):
         cors_headers = {
             'Access-Control-Allow-Origin': '*',
@@ -517,6 +534,20 @@ class BestpayBDVController(http.Controller):
                 _logger.warning(f"[BDV NOTIFICACIÓN] bdv_api_key_prod: '{partner.bdv_api_key_prod}'")
             else:
                 _logger.warning(f"[BDV NOTIFICACIÓN] ❌ NO se encontró ningún partner con el teléfono: '{numero_comercio}'")
+                # Puede ser un comercio nuevo sin configurar o un intento
+                # externo. Se registra para diagnóstico, sin alertar al grupo.
+                log_business_error(
+                    request.env,
+                    'bdv_webhook_notify',
+                    input_data={'numero_comercio': numero_comercio},
+                    output_data=(
+                        'No se encontró un comercio con el teléfono de '
+                        'notificación %s.' % numero_comercio
+                    ),
+                    is_error=False,
+                    http=True,
+                    meta={'proveedor': 'bdv'},
+                )
 
             # 5. Validar API Key según el entorno del proveedor (QA vs Producción)
             api_key_valida = False
@@ -617,6 +648,16 @@ class BestpayBDVController(http.Controller):
                 )
         except Exception as e:
             _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
+            if not is_logged(e):
+                log_business_error(
+                    request.env,
+                    'bdv_webhook_notify',
+                    output_data='Error inesperado procesando el webhook del BDV: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={'proveedor': 'bdv'},
+                )
             return Response(
                 json.dumps({"codigo": "00", "mensajeCliente": "Error interno", "mensajeSistema": "Notificación recibida con error"}),
                 status=200, content_type='application/json', headers=cors_headers
@@ -662,6 +703,7 @@ class BestpayBDVController(http.Controller):
     # 5. API C2P: GENERAR OTP (Paso 1 del flujo multi-paso)
     # =====================================================
     @http.route('/api/bestpay/v1/c2p/generate_otp', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def c2p_generate_otp(self, uuid_hash=None, customer_document_id=None, customer_phone=None, customer_bank_code=None, **kw):
         """
         Recibe los datos iniciales del cliente y solicita el OTP al BDV.
@@ -747,12 +789,24 @@ class BestpayBDVController(http.Controller):
             return {'success': False, 'error': str(e)}
         except Exception as e:
             _logger.error(f"[BDV C2P OTP] Error inesperado: {str(e)}", exc_info=True)
+            if not is_logged(e):
+                log_business_error(
+                    request.env,
+                    'c2p_generate_otp',
+                    input_data={'tx': transaction.reference},
+                    output_data='Error inesperado generando el OTP C2P: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={'proveedor': 'bdv', 'tx': transaction.reference},
+                )
             return {'success': False, 'error': 'Error interno del servidor al generar OTP.'}
 
     # =====================================================
     # 6. API C2P: PROCESAR PAGO (Paso 2 del flujo multi-paso)
     # =====================================================
     @http.route('/api/bestpay/v1/c2p/process_payment', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def c2p_process_payment(self, uuid_hash=None, otp=None, **kw):
         """
         Recibe el OTP del cliente y ejecuta el cobro real en el BDV.
@@ -851,12 +905,24 @@ class BestpayBDVController(http.Controller):
                 })
             except Exception:
                 pass
+            if not is_logged(e):
+                log_business_error(
+                    request.env,
+                    'c2p_process_payment',
+                    input_data={'tx': transaction.reference},
+                    output_data='Error inesperado procesando el cobro C2P: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={'proveedor': 'bdv', 'tx': transaction.reference},
+                )
             return {'success': False, 'error': 'Error interno del servidor al procesar el pago.'}
 
     # =====================================================
     # 6.1 API C2P: CONSULTA DE ESTADO (Reconciliación del checkout)
     # =====================================================
     @http.route('/api/bestpay/v1/c2p/status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def c2p_status(self, uuid_hash=None, **kw):
         """
         Consulta de solo lectura del estado del cobro C2P.
@@ -898,6 +964,7 @@ class BestpayBDVController(http.Controller):
     # 7. API CONSULTA DE MOVIMIENTOS BDV (Proxy para E-commerce)
     # =====================================================
     @http.route('/api/bestpay/v1/bdv/consulta/movimientos', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def bdv_consultar_movimientos_api(self, **kwargs):
         """
         Endpoint REST para que el e-commerce consulte sus movimientos bancarios.
@@ -955,6 +1022,16 @@ class BestpayBDVController(http.Controller):
                 return {'status': 'error', 'message': resultado.get('message')}
         except Exception as e:
             _logger.error(f"[BDV MOVIMIENTOS API] Error: {str(e)}")
+            log_business_error(
+                request.env,
+                'bdv_consultar_movimientos_api',
+                input_data={'partner': partner.name},
+                output_data='Error consultando movimientos del BDV: %s' % e,
+                exc=e,
+                is_error=True,
+                http=True,
+                meta={'proveedor': 'bdv', 'cliente': partner.name},
+            )
             return {'status': 'error', 'message': f'Error interno: {str(e)}'}
 
     # =====================================================
@@ -964,6 +1041,7 @@ class BestpayBDVController(http.Controller):
     # 8. API POLLING: VERIFICAR CASADO AUTOMÁTICO (Checkout)
     # =====================================================
     @http.route('/api/bestpay/v1/bdv/checkout/check_status', type='jsonrpc', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def bdv_checkout_check_status(self, hash=None, payer_phone=None, **kw):
         """
         Consulta si existe una notificación bancaria que case con la transacción.

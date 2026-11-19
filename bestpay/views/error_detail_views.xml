@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_bestpay_error_detail_list" model="ir.ui.view">
+        <field name="name">error.detail.list</field>
+        <field name="model">error.detail</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="event_log_id"/>
+                <field name="function_name"/>
+                <field name="error_type"/>
+                <field name="notified"/>
+                <field name="notify_attempts"/>
+                <field name="notify_date"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_bestpay_error_detail_form" model="ir.ui.view">
+        <field name="name">error.detail.form</field>
+        <field name="model">error.detail</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_retry_telegram" string="Reenviar a Telegram"
+                            type="object" class="btn-primary"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="event_log_id"/>
+                            <field name="function_name"/>
+                            <field name="error_type"/>
+                        </group>
+                        <group>
+                            <field name="notified"/>
+                            <field name="notify_attempts"/>
+                            <field name="notify_date"/>
+                        </group>
+                    </group>
+                    <group string="Último error de envío">
+                        <field name="notify_error" nolabel="1"/>
+                    </group>
+                    <group string="Traza del Error">
+                        <field name="error_trace" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_bestpay_error_detail_search" model="ir.ui.view">
+        <field name="name">error.detail.search</field>
+        <field name="model">error.detail</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="function_name"/>
+                <field name="error_type"/>
+                <field name="event_log_id"/>
+                <filter name="not_notified" string="No notificados"
+                        domain="[('notified', '=', False)]"/>
+                <filter name="failed_delivery" string="Falló el envío"
+                        domain="[('notified', '=', False), ('notify_attempts', '&gt;', 0)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_bestpay_error_detail" model="ir.actions.act_window">
+        <field name="name">Detalles de Error</field>
+        <field name="res_model">error.detail</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_bestpay_error_detail"
+              name="Detalles de Error"
+              parent="bestpay.menu_bestpay_errors_root"
+              action="action_bestpay_error_detail"
+              sequence="20"/>
+</odoo>

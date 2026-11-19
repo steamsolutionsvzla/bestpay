@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_bestpay_event_log_settings_form" model="ir.ui.view">
+        <field name="name">bestpay.event.log.settings.form</field>
+        <field name="model">res.config.settings</field>
+        <field name="arch" type="xml">
+            <form string="Errores y Notificaciones">
+                <sheet>
+                    <group>
+                        <group string="Telegram">
+                            <field name="bestpay_telegram_enabled"/>
+                            <field name="bestpay_telegram_bot_token" password="True"/>
+                            <field name="bestpay_telegram_chat_id"
+                                   placeholder="123456789,-1001234567890"/>
+                            <field name="bestpay_instance_label"
+                                   placeholder="BESTPAY-DEV"/>
+                        </group>
+                    </group>
+                    <div class="text-muted mt16">
+                        El chat id puede ser uno o varios separados por coma
+                        (chat privado y grupo). La etiqueta identifica esta base
+                        cuando varias instancias comparten el mismo grupo.
+                        Si se deja vacía se usa el nombre de la base de datos.
+                        El botón de prueba envía un mensaje real a los chats
+                        configurados.
+                    </div>
+                </sheet>
+                <footer>
+                    <button name="execute" type="object" string="Guardar"
+                            class="btn-primary"/>
+                    <button name="action_test_telegram" type="object"
+                            string="Probar conexión" class="btn-secondary"/>
+                    <button special="cancel" string="Cancelar"
+                            class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_bestpay_event_log_settings" model="ir.actions.act_window">
+        <field name="name">Errores y Notificaciones</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="view_bestpay_event_log_settings_form"/>
+        <field name="target">new</field>
+        <field name="context">{}</field>
+    </record>
+
+    <menuitem id="menu_bestpay_event_log_settings"
+              name="Errores y Notificaciones"
+              parent="bestpay.menu_bestpay_errors_root"
+              action="action_bestpay_event_log_settings"
+              sequence="30"/>
+</odoo>

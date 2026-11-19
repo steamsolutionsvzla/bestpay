@@ -7,6 +7,9 @@ import base64
 import binascii
 from datetime import datetime, timezone
 
+from ..utils.api_logger import api_call_logger
+from ..utils.business_logger import log_business_error
+
 _logger = logging.getLogger(__name__)
 
 
@@ -66,6 +69,25 @@ class BestPayApiController(http.Controller):
             _logger.error(
                 "[API] Error cifrando respuesta: %s. Se devuelve error al cliente.", e
             )
+            try:
+                log_business_error(
+                    request.env,
+                    '_bestpay_encrypt_or_error',
+                    input_data={'partner_id': partner.id if partner else False},
+                    output_data='No se pudo cifrar la respuesta para el cliente: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={
+                        'cliente': partner.name if partner else False,
+                        'proveedor': 'bestpay',
+                    },
+                    dedupe_key='bestpay_encrypt_response:%s' % (
+                        partner.id if partner else 0),
+                    dedupe_minutes=60,
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar el fallo de cifrado.')
             return self._bestpay_standard_response(
                 status='error',
                 message='No se pudo cifrar la respuesta. Reintenta con la misma referencia.',
@@ -113,6 +135,7 @@ class BestPayApiController(http.Controller):
         return response
 
     @http.route('/api/v1/transaction/create', type='json', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def create_transaction_api(self, **kwargs):
         # ========================================================================
         # 1-3. AUTENTICACIÓN, PARTNER Y DESCIFRADO (lógica común de la API)
@@ -238,6 +261,27 @@ class BestPayApiController(http.Controller):
             payment_method = provider.payment_method_ids[:1]
 
         if not payment_method:
+            try:
+                log_business_error(
+                    request.env,
+                    'create_transaction_api',
+                    input_data={
+                        'provider': provider_code,
+                        'payment_method': method_code,
+                    },
+                    output_data=(
+                        'No se encontró el método de pago "%s" vinculado al '
+                        'proveedor "%s".' % (method_code or 'por defecto', provider_code)
+                    ),
+                    is_error=False,
+                    http=True,
+                    meta={
+                        'proveedor': provider_code,
+                        'cliente': partner.name,
+                    },
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar el método de pago faltante.')
             response = self._bestpay_standard_response(
                 status='error',
                 message=f'No se encontró el método de pago "{method_code or "por defecto"}" vinculado al proveedor "{provider_code}". Verifica la configuración en Odoo.',
@@ -334,6 +378,28 @@ class BestPayApiController(http.Controller):
                 'is_recalculable_ves': recalcular, 
             })
         except Exception as e:
+            try:
+                log_business_error(
+                    request.env,
+                    'create_transaction_api',
+                    input_data={
+                        'external_reference': external_reference,
+                        'provider': provider_code,
+                        'currency': currency_code,
+                        'amount': amount,
+                    },
+                    output_data='No se pudo crear la transacción en Odoo: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={
+                        'cliente': partner.name,
+                        'proveedor': provider_code,
+                        'referencia_externa': external_reference,
+                    },
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar el fallo al crear la TX.')
             response = self._bestpay_standard_response(
                 status='error',
                 message=f'Error en Odoo: {str(e)}',
@@ -350,7 +416,29 @@ class BestPayApiController(http.Controller):
                 tx._set_error(error_msg)
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {error_msg}. Error interno: {str(tx_err)}"})
-            
+
+            try:
+                log_business_error(
+                    request.env,
+                    'create_transaction_api',
+                    input_data={
+                        'external_reference': external_reference,
+                        'provider': provider_code,
+                    },
+                    output_data=error_msg,
+                    exc=e,
+                    is_error=True,
+                    http=True,
+                    meta={
+                        'cliente': partner.name,
+                        'proveedor': provider_code,
+                        'tx': tx.reference,
+                        'referencia_externa': external_reference,
+                    },
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar el fallo con el banco.')
+
             response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
@@ -366,7 +454,28 @@ class BestPayApiController(http.Controller):
                 tx._set_error(datos_banco['error'])
             except Exception as tx_err:
                 tx.write({'state': 'error', 'payment_request_response': f"Fallo crítico: {datos_banco['error']}. Error interno: {str(tx_err)}"})
-            
+
+            try:
+                log_business_error(
+                    request.env,
+                    'create_transaction_api',
+                    input_data={
+                        'external_reference': external_reference,
+                        'provider': provider_code,
+                    },
+                    output_data='El banco devolvió un error: %s' % datos_banco['error'],
+                    is_error=True,
+                    http=True,
+                    meta={
+                        'cliente': partner.name,
+                        'proveedor': provider_code,
+                        'tx': tx.reference,
+                        'referencia_externa': external_reference,
+                    },
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar el error devuelto por el banco.')
+
             response = self._bestpay_standard_response(
                 tx=tx,
                 status='error',
@@ -462,6 +571,21 @@ class BestPayApiController(http.Controller):
                 "[API] Cliente %s sin clave de cifrado válida. No se procesa la consulta.",
                 partner.name,
             )
+            try:
+                log_business_error(
+                    request.env,
+                    '_bestpay_auth_and_decrypt',
+                    input_data={'partner': partner.name},
+                    output_data=(
+                        'El cliente no tiene una clave de cifrado válida '
+                        'configurada. No se procesa la consulta.'
+                    ),
+                    is_error=False,
+                    http=True,
+                    meta={'cliente': partner.name},
+                )
+            except Exception:
+                _logger.exception('[API] No se pudo registrar la clave inválida.')
             return None, self._bestpay_standard_response(
                 status='error',
                 message='El cliente no tiene una clave de cifrado válida configurada. Contacta a BestPay.',
@@ -488,6 +612,7 @@ class BestPayApiController(http.Controller):
             )
 
     @http.route('/api/v1/transactions/search', type='json', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def search_transactions_api(self, **kwargs):
         auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
@@ -507,6 +632,16 @@ class BestPayApiController(http.Controller):
             return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][SEARCH] Error: %s", e)
+            try:
+                log_business_error(
+                    request.env, 'search_transactions_api',
+                    input_data={'partner': partner.name},
+                    output_data='Error interno al consultar transacciones: %s' % e,
+                    exc=e, is_error=True, http=True,
+                    meta={'cliente': partner.name},
+                )
+            except Exception:
+                _logger.exception('[API][SEARCH] No se pudo registrar el error.')
             resp = self._bestpay_standard_response(
                 status='error',
                 message='Error interno al consultar transacciones.',
@@ -518,6 +653,7 @@ class BestPayApiController(http.Controller):
 
     @http.route('/api/v1/transaction/get', type='json', auth='none', methods=['POST'], csrf=False)
     @http.route('/api/v1/transaction/detail', type='json', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def get_transaction_api(self, **kwargs):
         auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
@@ -538,6 +674,16 @@ class BestPayApiController(http.Controller):
             return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][GET] Error: %s", e)
+            try:
+                log_business_error(
+                    request.env, 'get_transaction_api',
+                    input_data={'partner': partner.name},
+                    output_data='Error interno al consultar transacción: %s' % e,
+                    exc=e, is_error=True, http=True,
+                    meta={'cliente': partner.name},
+                )
+            except Exception:
+                _logger.exception('[API][GET] No se pudo registrar el error.')
             resp = self._bestpay_standard_response(
                 status='error',
                 message='Error interno al consultar transacción.',
@@ -548,6 +694,7 @@ class BestPayApiController(http.Controller):
         return self._bestpay_encrypt_or_error(result, partner)
 
     @http.route('/api/v1/transaction/cancel', type='json', auth='none', methods=['POST'], csrf=False)
+    @api_call_logger
     def cancel_transaction_api(self, **kwargs):
         auth_result, error_resp = self._bestpay_auth_and_decrypt(kwargs)
         if error_resp is not None:
@@ -569,6 +716,16 @@ class BestPayApiController(http.Controller):
             return self._bestpay_encrypt_or_error(resp, partner)
         except Exception as e:
             _logger.error("[API][CANCEL] Error: %s", e)
+            try:
+                log_business_error(
+                    request.env, 'cancel_transaction_api',
+                    input_data={'partner': partner.name},
+                    output_data='Error interno al cancelar transacción: %s' % e,
+                    exc=e, is_error=True, http=True,
+                    meta={'cliente': partner.name},
+                )
+            except Exception:
+                _logger.exception('[API][CANCEL] No se pudo registrar el error.')
             resp = self._bestpay_standard_response(
                 status='error',
                 message='Error interno al cancelar transacción.',

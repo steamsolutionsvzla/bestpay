@@ -1,3 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_bestpay_bank_notification_admin,bestpay.bank.notification.admin,model_bestpay_bank_notification,base.group_system,1,1,1,1
 access_bestpay_bank_notification_user,bestpay.bank.notification.user,model_bestpay_bank_notification,base.group_user,1,0,0,0
+access_event_log_system,event.log.system,model_event_log,base.group_system,1,1,1,1
+access_error_detail_system,error.detail.system,model_error_detail,base.group_system,1,1,1,1

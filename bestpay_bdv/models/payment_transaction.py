@@ -8,6 +8,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
+from odoo.addons.bestpay.utils.business_logger import is_logged, log_business_error
+
 _logger = logging.getLogger(__name__)
 
 
@@ -207,6 +209,24 @@ class PaymentTransactionBDV(models.Model):
         # 1. Obtener credenciales del provider, pasando el partner (comercio)
         creds = provider.bdv_get_api_credentials(partner=self.partner_id)
         if not creds['api_key']:
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data={'tx': self.reference},
+                output_data=(
+                    'Falta configurar la API Key del BDV para el comercio %s.'
+                    % (self.partner_id.name or '-')
+                ),
+                is_error=True,
+                error_type='BDVMissingApiKey',
+                dedupe_key='bdv_missing_api_key:%s' % (self.partner_id.id or 0),
+                dedupe_minutes=60,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'comercio': self.partner_id.name,
+                },
+            )
             raise UserError("Falta configurar la API Key del BDV en el proveedor de pago.")
 
         # 2. Construir el payload que pide el BDV
@@ -270,6 +290,21 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_conciliation_message': mensaje,
                 'state': 'error',
             })
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data={'tx': self.reference, 'url': creds.get('api_url')},
+                output_data='Timeout esperando la respuesta del BDV.',
+                is_error=True,
+                error_type='BDVTimeout',
+                dedupe_key='bdv_conciliation_timeout',
+                dedupe_minutes=15,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'ambiente': env_type,
+                },
+            )
             raise UserError(mensaje)
         except requests.exceptions.RequestException as e:
             mensaje = 'No se pudo conectar con el BDV. Intenta nuevamente.'
@@ -279,6 +314,22 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_conciliation_message': f"Error de conexión: {str(e)}",
                 'state': 'error',
             })
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data=payload,
+                output_data='Error de conexión con el BDV: %s' % e,
+                exc=e,
+                is_error=True,
+                dedupe_key='bdv_conciliation_connection',
+                dedupe_minutes=15,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'ambiente': env_type,
+                    'url': creds.get('api_url'),
+                },
+            )
             raise UserError(mensaje)
 
         # 5. Guardar la respuesta cruda (incluye el cuerpo de los errores HTTP)
@@ -299,6 +350,22 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_conciliation_message': mensaje,
                 'state': 'error',
             })
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data={'tx': self.reference, 'url': creds.get('api_url')},
+                output_data='El BDV respondió HTTP %s: %s' % (
+                    response.status_code, mensaje),
+                is_error=True,
+                error_type='BDVHttpError',
+                dedupe_key='bdv_conciliation_http:%s' % response.status_code,
+                dedupe_minutes=15,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'http_status': response.status_code,
+                },
+            )
             raise UserError(mensaje)
 
         # 7. Procesar el código de respuesta del BDV
@@ -326,6 +393,16 @@ class PaymentTransactionBDV(models.Model):
                 'state': 'cancel',
             })
             _logger.warning(f"[BDV] ❌ TX {self.id} RECHAZADA: {mensaje}")
+            # Rechazo de negocio: se registra para auditoría, pero no
+            # despierta al grupo (puede ser un dato mal tecleado).
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data={'tx': self.reference, 'referencia': self.bdv_referencia},
+                output_data='Pago rechazado por el BDV: %s' % mensaje,
+                is_error=False,
+                meta={'proveedor': 'bdv', 'tx': self.reference},
+            )
             return False
         else:
             # ⚠️ CÓDIGO DESCONOCIDO
@@ -335,6 +412,24 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_conciliation_message': mensaje,
             })
             _logger.error(f"[BDV] ⚠️ TX {self.id} código inesperado: {code}")
+            log_business_error(
+                self.env,
+                'bdv_send_conciliation',
+                input_data={'tx': self.reference},
+                output_data=(
+                    'El BDV devolvió un código inesperado %s: %s'
+                    % (code, message)
+                ),
+                is_error=True,
+                error_type='BDVUnexpectedCode',
+                dedupe_key='bdv_unexpected_code:%s' % (code or 'sin-codigo'),
+                dedupe_minutes=30,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'codigo': code,
+                },
+            )
             return False
 
     # Mensajes de la API de Conciliación del BDV.
@@ -561,6 +656,25 @@ class PaymentTransactionBDV(models.Model):
             
         if not api_key:
             _logger.error(f"BDV C2P: Falta API Key para entorno {env_type} en partner {self.partner_id.name}")
+            log_business_error(
+                self.env,
+                '_bdv_get_c2p_headers',
+                input_data={'partner': self.partner_id.name, 'ambiente': env_type},
+                output_data=(
+                    'Falta la API Key C2P para el entorno %s del comercio %s.'
+                    % (env_type.upper(), self.partner_id.name or '-')
+                ),
+                is_error=True,
+                error_type='BDVMissingC2PApiKey',
+                dedupe_key='bdv_c2p_missing_api_key:%s:%s' % (
+                    self.partner_id.id or 0, env_type),
+                dedupe_minutes=60,
+                meta={
+                    'proveedor': 'bdv',
+                    'comercio': self.partner_id.name,
+                    'ambiente': env_type,
+                },
+            )
             raise UserError(f"Error de configuración: Falta la API Key para el entorno {env_type.upper()} en los datos del comercio.")
             
         return {
@@ -584,6 +698,25 @@ class PaymentTransactionBDV(models.Model):
                     getattr(self.partner_id, 'bdv_telefono_destino', '')
                     
         if not phone:
+            log_business_error(
+                self.env,
+                '_bdv_get_c2p_commerce_phone',
+                input_data={'partner': self.partner_id.name, 'ambiente': env_type},
+                output_data=(
+                    'Falta el Teléfono Destino del comercio %s para el '
+                    'entorno %s.' % (self.partner_id.name or '-', env_type.upper())
+                ),
+                is_error=True,
+                error_type='BDVMissingC2PPhone',
+                dedupe_key='bdv_c2p_missing_phone:%s:%s' % (
+                    self.partner_id.id or 0, env_type),
+                dedupe_minutes=60,
+                meta={
+                    'proveedor': 'bdv',
+                    'comercio': self.partner_id.name,
+                    'ambiente': env_type,
+                },
+            )
             raise UserError(f"Error de configuración: Falta el Teléfono Destino del comercio para el entorno {env_type.upper()}.")
         return phone
 
@@ -627,9 +760,37 @@ class PaymentTransactionBDV(models.Model):
                 return {'success': True, 'message': data.get('message', 'OTP generado correctamente')}
             
             self.write({'bdv_c2p_status': 'error', 'state_message': data.get('message')})
+            log_business_error(
+                self.env,
+                'bdv_c2p_generate_otp',
+                input_data={'tx': self.reference, 'codigo': data.get('code')},
+                output_data='El BDV no generó el OTP: %s' % data.get('message'),
+                is_error=False,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'codigo': data.get('code'),
+                },
+            )
             raise UserError(f"Error generando OTP: {data.get('message')}")
         except Exception as e:
             self._bdv_c2p_log_stage("GENERATE OTP · ERROR", response_payload={'error': str(e)})
+            if not is_logged(e) and not isinstance(e, UserError):
+                log_business_error(
+                    self.env,
+                    'bdv_c2p_generate_otp',
+                    input_data={'tx': self.reference},
+                    output_data='Error generando OTP C2P: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    dedupe_key='bdv_c2p_otp_exception',
+                    dedupe_minutes=15,
+                    meta={
+                        'proveedor': 'bdv',
+                        'tx': self.reference,
+                        'ambiente': env_type,
+                    },
+                )
             raise
 
     def bdv_c2p_process_payment(self):
@@ -694,9 +855,37 @@ class PaymentTransactionBDV(models.Model):
                 'bdv_c2p_status': 'error',
                 'state_message': data.get('message', 'Error desconocido en el proceso de cobro')
             })
+            log_business_error(
+                self.env,
+                'bdv_c2p_process_payment',
+                input_data={'tx': self.reference, 'codigo': data.get('code')},
+                output_data='El BDV rechazó el cobro C2P: %s' % data.get('message'),
+                is_error=False,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'codigo': data.get('code'),
+                },
+            )
             return {'success': False, 'code': data.get('code'), 'message': data.get('message')}
         except Exception as e:
             self._bdv_c2p_log_stage("PROCESS PAYMENT (OTP) · ERROR", response_payload={'error': str(e)})
+            if not is_logged(e) and not isinstance(e, UserError):
+                log_business_error(
+                    self.env,
+                    'bdv_c2p_process_payment',
+                    input_data={'tx': self.reference},
+                    output_data='Error procesando el cobro C2P: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    dedupe_key='bdv_c2p_process_exception',
+                    dedupe_minutes=15,
+                    meta={
+                        'proveedor': 'bdv',
+                        'tx': self.reference,
+                        'ambiente': env_type,
+                    },
+                )
             raise
 
     def bdv_c2p_annul(self):
@@ -741,9 +930,37 @@ class PaymentTransactionBDV(models.Model):
             if data.get('code') == '1000':
                 self.write({'bdv_c2p_status': 'annulled', 'state': 'cancel'})
                 return True
+            log_business_error(
+                self.env,
+                'bdv_c2p_annul',
+                input_data={'tx': self.reference, 'codigo': data.get('code')},
+                output_data='El BDV no anuló el cobro C2P: %s' % data.get('message'),
+                is_error=False,
+                meta={
+                    'proveedor': 'bdv',
+                    'tx': self.reference,
+                    'codigo': data.get('code'),
+                },
+            )
             return False
         except Exception as e:
             self._bdv_c2p_log_stage("ANULACION · ERROR", response_payload={'error': str(e)})
+            if not is_logged(e) and not isinstance(e, UserError):
+                log_business_error(
+                    self.env,
+                    'bdv_c2p_annul',
+                    input_data={'tx': self.reference},
+                    output_data='Error anulando el cobro C2P: %s' % e,
+                    exc=e,
+                    is_error=True,
+                    dedupe_key='bdv_c2p_annul_exception',
+                    dedupe_minutes=15,
+                    meta={
+                        'proveedor': 'bdv',
+                        'tx': self.reference,
+                        'ambiente': env_type,
+                    },
+                )
             raise
         # =================================================================
     # 🔔 MÉTODOS DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)
@@ -881,7 +1098,23 @@ class PaymentTransactionBDV(models.Model):
         )
 
         for tx in candidates:
-            tx._bestpay_send_webhook_3ro()
+            try:
+                tx._bestpay_send_webhook_3ro()
+            except Exception as e:
+                _logger.error(
+                    "[BESTPAY WEBHOOK CRON] Error inesperado en TX %s: %s",
+                    tx.reference, e,
+                )
+                log_business_error(
+                    self.env,
+                    '_bestpay_process_pending_webhooks',
+                    input_data={'tx': tx.reference},
+                    output_data='Error inesperado procesando el webhook de %s: %s'
+                                % (tx.reference, e),
+                    exc=e,
+                    is_error=False,
+                    meta={'tx': tx.reference, 'proveedor': 'bdv'},
+                )
 
     def _bestpay_send_webhook_3ro(self):
         """Envía el webhook al tercero (un intento). Actualiza el estado."""
@@ -897,6 +1130,17 @@ class PaymentTransactionBDV(models.Model):
                 'bestpay_webhook_last_error': 'URL de webhook no configurada en el partner.',
                 'bestpay_webhook_attempts': self.MAX_WEBHOOK_ATTEMPTS,  # No reintenta más
             })
+            log_business_error(
+                self.env,
+                '_bestpay_send_webhook_3ro',
+                input_data={'tx': self.reference},
+                output_data=(
+                    'La TX %s no tiene URL de webhook configurada en el cliente; '
+                    'no se puede notificar el pago al tercero.' % self.reference
+                ),
+                is_error=False,
+                meta={'tx': self.reference, 'proveedor': 'bdv'},
+            )
             return
 
         try:
@@ -965,6 +1209,24 @@ class PaymentTransactionBDV(models.Model):
             _logger.warning(
                 "[BESTPAY WEBHOOK] ❌ TX %s agotó %d intentos. Último error: %s",
                 self.id, attempts, error_msg
+            )
+            log_business_error(
+                self.env,
+                '_bestpay_schedule_retry',
+                input_data={'tx': self.reference, 'intentos': attempts},
+                output_data=(
+                    'La notificación al tercero de la TX %s agotó %s intentos. '
+                    'Último error: %s' % (self.reference, attempts, error_msg)
+                ),
+                is_error=True,
+                error_type='Webhook3roExhausted',
+                dedupe_key='bdv_webhook_final_failure',
+                dedupe_minutes=10,
+                meta={
+                    'tx': self.reference,
+                    'proveedor': 'bdv',
+                    'intentos': attempts,
+                },
             )
             return
 
@@ -1187,7 +1449,35 @@ class PaymentTransactionBDV(models.Model):
             # Esto evita transacciones "fantasma" en el módulo de contabilidad.
             
             _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ No se encontró una transacción previa para casar. Referencia: {referencia}, Tel: {telefono_pagador}, Monto: {monto}. Se guarda solo como Notificación sin enlazar.")
-            
+
+            # Dinero recibido sin transacción que casar: es el caso más
+            # importante de revisar. Se avisa con dedupe por referencia para
+            # que las re-notificaciones del banco no lo repitan.
+            log_business_error(
+                self.env,
+                'bdv_process_notification_webhook',
+                input_data={
+                    'referencia': referencia,
+                    'monto': monto,
+                    'comercio': partner.name if partner else False,
+                },
+                output_data=(
+                    'Llegó una notificación de pago del BDV sin transacción '
+                    'que casar (referencia %s, monto %s). Quedó como '
+                    'notificación huérfana.' % (referencia or '-', monto)
+                ),
+                is_error=True,
+                error_type='BDVOrphanNotification',
+                dedupe_key='bdv_orphan_notification:%s' % (referencia or 'sin-referencia'),
+                dedupe_minutes=1440,
+                meta={
+                    'proveedor': 'bdv',
+                    'referencia': referencia,
+                    'monto': monto,
+                    'comercio': partner.name if partner else False,
+                },
+            )
+
             # Devolvemos '00' para que el banco registre que recibimos el aviso,
             # pero internamente sabemos que quedó como notificación huérfana.
             return {'codigo': '00'}
