@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api
+import re
 import requests
 from bs4 import BeautifulSoup
 import logging
@@ -7,6 +8,47 @@ import logging
 from ..utils.business_logger import log_business_error
 
 _logger = logging.getLogger(__name__)
+
+
+def _parse_bcv_rate(raw):
+    """Convierte el texto de una tasa del BCV a ``float``.
+
+    El BCV publica en formato venezolano: ``.`` como separador de miles y
+    ``,`` como separador decimal (ej. ``1.009,07172979``). También se tolera
+    el formato con punto decimal (ej. ``36.5682``) por si cambian la web.
+
+    :raises ValueError: si el texto no contiene un número interpretable.
+    """
+    if raw is None:
+        raise ValueError('texto de tasa vacío')
+
+    texto = re.sub(r'[^\d.,-]', '', str(raw)).strip()
+    if not any(caracter.isdigit() for caracter in texto):
+        raise ValueError('el texto de tasa no contiene dígitos: %r' % (raw,))
+
+    if ',' in texto and '.' in texto:
+        # El último separador que aparece es el decimal; el otro es de miles.
+        decimal = ',' if texto.rfind(',') > texto.rfind('.') else '.'
+        miles = '.' if decimal == ',' else ','
+        texto = texto.replace(miles, '').replace(decimal, '.')
+    elif ',' in texto:
+        # Formato venezolano: la coma siempre es decimal.
+        texto = texto.replace('.', '').replace(',', '.')
+    elif texto.count('.') > 1:
+        # Varios puntos y ninguna coma. Si todos los grupos son de 3 dígitos
+        # son separadores de miles; si no, el último punto es el decimal.
+        grupos = texto.split('.')
+        if all(len(grupo) == 3 for grupo in grupos[1:]):
+            texto = texto.replace('.', '')
+        else:
+            texto = ''.join(grupos[:-1]) + '.' + grupos[-1]
+    elif texto.count('.') == 1:
+        entero, decimales = texto.split('.')
+        # '1.009' son miles; '36.5682' es decimal (el BCV usa 4+ decimales).
+        if len(decimales) == 3 and entero.lstrip('-').isdigit():
+            texto = texto.replace('.', '')
+
+    return float(texto)
 
 
 class ResCurrency(models.Model):
@@ -73,8 +115,29 @@ class ResCurrency(models.Model):
                 )
                 return
 
-            texto_dolar = section_dolar.find('strong').text.strip()
-            tasa_dolar = float(texto_dolar.replace(',', '.'))
+            texto_dolar = None
+            try:
+                texto_dolar = section_dolar.find('strong').text.strip()
+                tasa_dolar = _parse_bcv_rate(texto_dolar)
+                if tasa_dolar <= 0:
+                    raise ValueError('la tasa USD no es positiva: %s' % tasa_dolar)
+            except Exception as e:
+                log_business_error(
+                    self.env,
+                    '_update_bcv_rate',
+                    input_data={'url': url, 'texto': texto_dolar},
+                    output_data=(
+                        'No se pudo interpretar la tasa USD del BCV: %s; '
+                        'la tasa NO se actualizó.' % e
+                    ),
+                    exc=e,
+                    is_error=True,
+                    error_type='BCVRateParseError',
+                    dedupe_key='bestpay_bcv_parse_usd',
+                    dedupe_minutes=60,
+                    meta={'servicio': 'BCV', 'url': url, 'moneda': 'USD'},
+                )
+                return
 
             if tasa_dolar > 0:
                 # 1. EN BASE USD: La tasa del Bolívar (VES) es el valor DIRECTO del BCV
@@ -109,8 +172,28 @@ class ResCurrency(models.Model):
 
                 # 2. EN BASE USD: El Euro se calcula cruzado (Tasa Dólar / Tasa Euro)
                 if section_euro:
-                    texto_euro = section_euro.find('strong').text.strip()
-                    tasa_euro = float(texto_euro.replace(',', '.'))
+                    texto_euro = None
+                    try:
+                        texto_euro = section_euro.find('strong').text.strip()
+                        tasa_euro = _parse_bcv_rate(texto_euro)
+                    except Exception as e:
+                        tasa_euro = 0.0
+                        log_business_error(
+                            self.env,
+                            '_update_bcv_rate',
+                            input_data={'url': url, 'texto': texto_euro},
+                            output_data=(
+                                'No se pudo interpretar la tasa EUR del BCV: %s; '
+                                'la tasa del Euro NO se actualizó (el Bolívar sí).'
+                                % e
+                            ),
+                            exc=e,
+                            is_error=True,
+                            error_type='BCVRateParseError',
+                            dedupe_key='bestpay_bcv_parse_eur',
+                            dedupe_minutes=60,
+                            meta={'servicio': 'BCV', 'url': url, 'moneda': 'EUR'},
+                        )
 
                     if tasa_euro > 0:
                         tasa_final_eur = tasa_dolar / tasa_euro
