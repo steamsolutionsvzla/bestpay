@@ -45,6 +45,46 @@ class BestPayApiController(http.Controller):
 
         return False
 
+    def _bestpay_close_superseded_transactions(self, txs, reason):
+        """Cierra intentos anteriores sin disparar el aviso de link vencido.
+
+        Se usa cuando el cliente cambia de proveedor, método, monto o moneda
+        antes de pagar. El estado 'no_pagado' bloquea el checkout del link
+        anterior en BDV y Mercantil, pero permite conciliar un pago tardío si
+        el banco llegara a confirmarlo.
+        """
+        for tx in txs.sudo():
+            try:
+                tx.write({
+                    'state': 'no_pagado',
+                    'bestpay_unpaid_reason': reason,
+                    'state_message': reason,
+                })
+                _logger.info(
+                    "[API] Transacción previa %s cerrada: %s",
+                    tx.reference, reason,
+                )
+            except Exception as e:
+                _logger.error(
+                    "[API] No se pudo cerrar la transacción previa %s: %s",
+                    tx.reference, e,
+                )
+                try:
+                    log_business_error(
+                        request.env,
+                        '_bestpay_close_superseded_transactions',
+                        input_data={'transaction': tx.reference},
+                        output_data='No se pudo cerrar la transacción previa: %s' % e,
+                        exc=e,
+                        is_error=True,
+                        http=True,
+                        meta={'tx': tx.reference},
+                    )
+                except Exception:
+                    _logger.exception(
+                        '[API] No se pudo registrar el fallo al cerrar la TX previa.'
+                    )
+
     @staticmethod
     def _bestpay_key_is_usable(encryption_key):
         """Valida que la clave sea base64 de 32 bytes (AES-256)."""
@@ -169,64 +209,25 @@ class BestPayApiController(http.Controller):
             )
             return self._bestpay_encrypt_or_error(response, partner)
         
+        # Si la orden ya fue pagada, no se permite iniciar otro pago ni cambiar
+        # de método. Se devuelve la transacción ganadora para que el cliente
+        # pueda mostrar el comprobante correcto.
         if external_reference:
-            transaccion_existente = request.env['payment.transaction'].sudo().search([
+            paid_tx = request.env['payment.transaction'].sudo().search([
                 ('bestpay_client_id', '=', partner.id),
                 ('external_reference', '=', external_reference),
-                ('state', 'not in', ['cancel', 'error']),
-            ], limit=1, order='create_date desc')
-
-            if transaccion_existente.state == 'done':
+                ('state', '=', 'done'),
+            ], limit=1, order='create_date desc, id desc')
+            if paid_tx:
                 response = self._bestpay_standard_response(
-                    tx=transaccion_existente,
+                    tx=paid_tx,
                     status='success',
                     message='Esta orden ya fue pagada.',
                     transaction_status='done',
-                    payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
-                    payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
+                    payment_details={'payment_link': paid_tx.payment_link or self._bestpay_extract_payment_link(tx=paid_tx)},
+                    payment_link=paid_tx.payment_link or self._bestpay_extract_payment_link(tx=paid_tx),
                 )
-                # CIFRAMOS ANTES DE RETORNAR
                 return self._bestpay_encrypt_or_error(response, partner)
-
-            # --- NUEVO: VALIDACIÓN DEFENSIVA PARA EVITAR EL ERROR DE FECHA ---
-            # Una transacción 'no_pagado' ya tiene el link cerrado: nunca se reutiliza,
-            # aunque por algún motivo no hayan pasado las 48h. Se emite una nueva.
-            if not transaccion_existente:
-                pass  # No hay transacción previa: se crea una nueva más abajo.
-            elif transaccion_existente.state == 'no_pagado':
-                _logger.info(
-                    "[API] Transacción %s está No pagada, se emite una nueva (external_reference=%s)",
-                    transaccion_existente.reference, external_reference
-                )
-            elif not transaccion_existente.create_date:
-                _logger.warning(
-                    "[API] Transacción ID=%s (Ref: %s) encontrada sin fecha de creación (corrupta). Se cancela para permitir reintento.",
-                    transaccion_existente.id, external_reference
-                )
-                transaccion_existente.write({
-                    'state': 'cancel',
-                    'state_message': 'Cancelada: fecha de creación inválida/corrupta.',
-                })
-            else:
-                # --- LÓGICA DE EXPIRACIÓN DEL LINK ---
-                # El vencimiento se calcula con create_date + 48h (ver modelo).
-                if not transaccion_existente._bestpay_is_link_expired():
-                    response = self._bestpay_standard_response(
-                        tx=transaccion_existente,
-                        status='success',
-                        message='Reutilizando la transacción existente.',
-                        transaction_status=transaccion_existente.state,
-                        payment_details={'payment_link': transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente)},
-                        payment_link=transaccion_existente.payment_link or self._bestpay_extract_payment_link(tx=transaccion_existente),
-                    )
-                    # CIFRAMOS ANTES DE RETORNAR
-                    return self._bestpay_encrypt_or_error(response, partner)
-
-                transaccion_existente._bestpay_mark_as_unpaid()
-                _logger.info(
-                    "[API] Transacción %s expirada, pasada a No pagado para permitir reintento (external_reference=%s)",
-                    transaccion_existente.reference, external_reference
-                )
 
         # 4. Validar Proveedor de pagos y permisos
         provider = request.env['payment.provider'].sudo().search([('code', '=', provider_code),('is_bestpay_provider', '=', True)], limit=1)
@@ -353,7 +354,77 @@ class BestPayApiController(http.Controller):
             tasa_para_guardar = round(monto_calculado_ves / monto_recibido, 4)
 
         payload_recibido = decrypted_data # Guardamos SOLO los datos limpios y descifrados
-        
+
+        # ====================================================================
+        # 5.b. Intentos previos de la misma orden
+        # ====================================================================
+        # Un mismo external_reference puede tener varios intentos: el cliente
+        # elige un método, se arrepiente y elige otro antes de pagar. Solo se
+        # reutiliza el link si el intento es idéntico (proveedor, método,
+        # monto y moneda). Si cambió algo, se emite un link nuevo y el
+        # anterior se cierra DESPUÉS de que el nuevo link salga bien.
+        open_txs = request.env['payment.transaction'].sudo().search([
+            ('bestpay_client_id', '=', partner.id),
+            ('external_reference', '=', external_reference),
+            ('state', 'in', ['draft', 'pending']),
+        ], order='create_date desc, id desc')
+
+        # Importante: ambos recordsets deben ser sudo. Bajo auth='none' no hay
+        # usuario en el entorno y un write sin sudo falla en check_access.
+        tx_to_reuse = request.env['payment.transaction'].sudo()
+        txs_to_supersede = request.env['payment.transaction'].sudo()
+        for open_tx in open_txs:
+            if not open_tx.create_date:
+                _logger.warning(
+                    "[API] Transacción ID=%s (Ref: %s) sin fecha de creación. "
+                    "Se cancela para permitir reintento.",
+                    open_tx.id, external_reference,
+                )
+                open_tx.write({
+                    'state': 'cancel',
+                    'state_message': 'Cancelada: fecha de creación inválida/corrupta.',
+                })
+                continue
+
+            if open_tx._bestpay_is_link_expired():
+                open_tx._bestpay_mark_as_unpaid()
+                _logger.info(
+                    "[API] Transacción %s expirada, pasada a No pagado "
+                    "(external_reference=%s)",
+                    open_tx.reference, external_reference,
+                )
+                continue
+
+            same_intent = (
+                open_tx.provider_id.id == provider.id
+                and open_tx.payment_method_id.id == payment_method.id
+                and open_tx.currency_id.id == currency_final.id
+                and abs((open_tx.amount or 0.0) - monto_final_odoo) <= 0.01
+                # Un intento sin link no sirve para reintentar: se emite uno nuevo.
+                and bool(self._bestpay_extract_payment_link(tx=open_tx))
+            )
+            if same_intent and not tx_to_reuse:
+                tx_to_reuse = open_tx
+            else:
+                txs_to_supersede |= open_tx
+
+        if tx_to_reuse:
+            # Reintento del mismo método: se conserva el link (idempotencia).
+            # Cualquier otro intento abierto de la orden ya no debe usarse.
+            self._bestpay_close_superseded_transactions(
+                txs_to_supersede,
+                'Cerrada porque se reutilizó un link vigente del mismo método de pago.',
+            )
+            response = self._bestpay_standard_response(
+                tx=tx_to_reuse,
+                status='success',
+                message='Reutilizando la transacción existente.',
+                transaction_status=tx_to_reuse.state,
+                payment_details={'payment_link': tx_to_reuse.payment_link or self._bestpay_extract_payment_link(tx=tx_to_reuse)},
+                payment_link=tx_to_reuse.payment_link or self._bestpay_extract_payment_link(tx=tx_to_reuse),
+            )
+            return self._bestpay_encrypt_or_error(response, partner)
+
         # [Paso 6 - Creación del registro]
         try:
             # Microsegundos reales: fields.Datetime.now() trunca a segundos y dos
@@ -491,6 +562,16 @@ class BestPayApiController(http.Controller):
         # reflejen que el link está vigente esperando pago.
         if tx.state == 'draft':
             tx._set_pending(state_message='Link de pago emitido, pendiente de pago.')
+
+        # El link nuevo ya está emitido: recién ahora se cierran los intentos
+        # anteriores con otro método/proveedor/monto. Si la creación hubiera
+        # fallado, el cliente conserva el link anterior para reintentar.
+        if txs_to_supersede:
+            self._bestpay_close_superseded_transactions(
+                txs_to_supersede,
+                'Método de pago cambiado por el cliente antes de pagar. '
+                'Se emitió el nuevo link %s.' % tx.reference,
+            )
 
          # 9. Respuesta exitosa
         payment_link = self._bestpay_extract_payment_link(tx=tx, payment_details=datos_banco)
