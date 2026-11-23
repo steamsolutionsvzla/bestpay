@@ -458,6 +458,8 @@ class PaymentTransactionBDV(models.Model):
             return 'Este pago ya fue conciliado anteriormente.'
         if 'no afiliado al producto' in lower:
             return 'La API Key del comercio no está afiliada al servicio de conciliación del BDV.'
+        if 'importe no coincide' in lower:
+            return 'El monto reportado no coincide con el pago realizado.'
         if lower.startswith('monto:') and 'transacc' in lower and 'realizada' in lower:
             return 'El monto reportado no coincide con el pago realizado.'
         if 'no existe' in lower:
