@@ -55,6 +55,19 @@ def _decrypt_with_available_keys(env, encrypted_data: str):
 
     return None, None
 
+
+def _is_mercantil_payment_successful(webhook_info: Dict[str, Any]) -> bool:
+    """Solo acepta como pago exitoso una respuesta bancaria sin código ni mensaje de error."""
+    if str(webhook_info.get('codigo', '')).strip() != "00":
+        return False
+
+    messages = (
+        webhook_info.get('mensajeCliente', ''),
+        webhook_info.get('mensajeSistema', ''),
+    )
+    return not any('ERROR' in str(message).upper() for message in messages)
+
+
 class BestPayWebhookController(http.Controller):
 
     def _bestpay_mer_link_is_expired(self, tx):
@@ -260,14 +273,42 @@ class BestPayWebhookController(http.Controller):
             )
             outgoing_response_json = json.dumps(response, ensure_ascii=False, indent=2)
 
+            payment_successful = _is_mercantil_payment_successful(webhook_info)
+            result_label = "PAGO APROBADO" if payment_successful else "PAGO RECHAZADO"
+
             # 5. Guardar cada log en su campo correspondiente
             tx.write({
                 # 'acquirer_reference': webhook_info.get('referencia'),
                 'provider_reference': guid,
-                'bank_in_log': incoming_raw_json,
-                'bank_out_log': outgoing_response_json,
+                'bank_in_log': (
+                    (tx.bank_in_log or '')
+                    + f"\n\n--- [WEBHOOK MERCANTIL - {result_label}] ---\n{incoming_raw_json}"
+                ),
+                'bank_out_log': (
+                    (tx.bank_out_log or '')
+                    + f"\n\n--- [RESPUESTA WEBHOOK MERCANTIL] ---\n{outgoing_response_json}"
+                ),
                 'mercantil_paid_by_manual_search': False,
             })
+
+            if not payment_successful:
+                bank_code = str(webhook_info.get('codigo', '')).strip() or 'desconocido'
+                error_message = str(
+                    webhook_info.get('mensajeSistema')
+                    or webhook_info.get('mensajeCliente')
+                    or f"Mercantil rechazó el pago (código {bank_code})."
+                )
+                _logger.warning(
+                    "[BESTPAY MERCANTIL WEBHOOK] Notificación de pago fallido para Tx %s "
+                    "(código %s): %s",
+                    tx.reference, bank_code, error_message,
+                )
+                _logger.info(
+                    "[BESTPAY MERCANTIL WEBHOOK] Se conserva el estado %s de Tx %s "
+                    "para permitir reintentar con el mismo link.",
+                    tx.state, tx.reference,
+                )
+                return self._json_response(response, status=200)
 
             # 6. Marcar Transacción como Exitosa.
             # Se permite 'no_pagado' como origen: si el cliente pagó antes de que el
