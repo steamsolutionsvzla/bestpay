@@ -98,17 +98,25 @@ class BestpayBDVController(http.Controller):
 
     # Códigos de la tabla de errores del BDV con un mensaje accionable.
     C2P_BANK_ERRORS = {
+        '1001': 'Los datos del pago no son válidos. Revisa la información e inténtalo de nuevo.',
         '1002': 'El banco del cliente no respondió a tiempo. Intenta nuevamente.',
+        '1006': 'El comercio no está habilitado para C2P en el BDV en este momento.',
+        '1013': 'El monto no es válido (el banco permite hasta 50.000,01).',
         '1014': 'El cliente no está afiliado a Pago Móvil en el banco seleccionado.',
         '1015': 'El número no está afiliado a la Clave Móvil del banco seleccionado.',
+        '1026': 'Referencia o monto duplicado. Verifica si el pago ya se realizó.',
         '1034': 'Saldo insuficiente en la cuenta del cliente.',
+        '1041': 'El servicio de C2P no está activo en este momento. Intenta más tarde.',
         '1050': 'El banco tardó demasiado en responder. Intenta nuevamente.',
         '1055': 'La clave C2P no es válida o expiró. Genera una nueva en tu banco e inténtalo otra vez.',
         '1056': 'El número de teléfono no corresponde con el titular de la cuenta.',
         '1061': 'El monto supera el límite diario permitido por el banco.',
         '1062': 'La cuenta del cliente presenta inconvenientes. Debe comunicarse con su banco.',
+        '1065': 'Se superó el límite de transacciones permitido para el comercio. Intenta más tarde.',
+        '1080': 'El documento de identidad del cliente no es válido.',
         '1091': 'El banco seleccionado no está disponible para C2P en este momento.',
         '1092': 'El banco seleccionado no se encuentra afiliado a C2P.',
+        '1094': 'Operación duplicada. Verifica si el pago ya se realizó.',
     }
 
     def _bestpay_c2p_client_key_message(self):
