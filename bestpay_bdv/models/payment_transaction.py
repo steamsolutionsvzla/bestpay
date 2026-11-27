@@ -9,6 +9,16 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.bestpay.utils.business_logger import is_logged, log_business_error
+from odoo.addons.bestpay.utils.identity import (
+    document_variants,
+    normalize_document,
+    normalize_phone,
+    only_digits,
+    parse_amount,
+    parse_bank_datetime,
+    phone_variants,
+    reference_matches,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -1248,238 +1258,670 @@ class PaymentTransactionBDV(models.Model):
             self.id, minutes, attempts, self.MAX_WEBHOOK_ATTEMPTS, error_msg
         )
 
-    def _bdv_attempt_auto_match_notification(self, phone=None, amount=None):
+    # ==================================================================
+    # CASADO DE NOTIFICACIONES BANCARIAS
+    # ==================================================================
+    def _bdv_notification_payment_date(self, payload):
+        """Fecha del pago reportada por el banco (o la de hoy)."""
+        fecha_raw = str((payload or {}).get('fecha') or '').strip()
+        for date_format in ('%Y%m%d', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(fecha_raw, date_format).date()
+            except (TypeError, ValueError):
+                continue
+        return fields.Date.today()
+
+    def _bdv_candidate_partner_domain(self, candidate_partners):
+        """Restringe la búsqueda a los partners candidatos del comercio.
+
+        Si no hay candidatos no se agrega filtro: el casado por referencia debe
+        poder encontrar la transacción aunque la configuración del comercio
+        esté incompleta.
         """
-        Busca en bestpay.bank.notification una notificación no casada
-        cuyo teléfono y monto coincidan exactamente con la transacción.
+        if not candidate_partners:
+            return []
+        return [
+            '|',
+            ('bestpay_client_id', 'in', candidate_partners.ids),
+            ('partner_id', 'in', candidate_partners.ids),
+        ]
+
+    def _bdv_open_candidate_transactions(self, amount, notification_dt, candidate_partners=None):
+        """Transacciones abiertas que pudieron originar el pago notificado.
+
+        Filtra por monto exacto y por una ventana de tiempo coherente:
+        la transacción no puede ser posterior al pago (salvo un pequeño
+        desfase de reloj) ni anterior a las 48h de vigencia del link.
+        """
+        amount = round(float(amount or 0.0), 2)
+        common_domain = [
+            ('provider_id.code', '=', 'bdv'),
+            ('state', 'not in', ['done', 'cancel', 'error']),
+            ('create_date', '<=', notification_dt + timedelta(minutes=5)),
+            (
+                'create_date',
+                '>=',
+                notification_dt - timedelta(hours=self.BESTPAY_LINK_EXPIRATION_HOURS),
+            ),
+        ]
+        common_domain += self._bdv_candidate_partner_domain(candidate_partners)
+
+        candidates = self.sudo().search(
+            common_domain + [
+                ('amount_ves', '>=', round(amount - 0.01, 2)),
+                ('amount_ves', '<=', round(amount + 0.01, 2)),
+            ],
+            order='create_date asc, id asc',
+        )
+        if candidates:
+            return candidates
+
+        # Respaldo para transacciones antiguas en VES sin amount_ves.
+        return self.sudo().search(
+            common_domain + [
+                ('currency_id.name', '=', 'VES'),
+                ('amount', '>=', round(amount - 0.01, 2)),
+                ('amount', '<=', round(amount + 0.01, 2)),
+            ],
+            order='create_date asc, id asc',
+        )
+
+    def _bdv_tx_amount_matches(self, tx, amount):
+        """True si el monto notificado coincide con el monto VES de la TX."""
+        amount = round(float(amount or 0.0), 2)
+        expected = tx.amount_ves
+        if not expected and tx.currency_id.name == 'VES':
+            expected = tx.amount
+        return abs((expected or 0.0) - amount) <= 0.01
+
+    def _bdv_reference_needs_identity(self, stored_reference):
+        """True si la referencia es tan corta que necesita validar pagador.
+
+        Un sufijo de 4 a 7 dígitos puede coincidir con varios pagos. Para esos
+        casos no se enlaza solo por referencia: se exige que el teléfono/cédula
+        del pagador también coincida con la transacción.
+        """
+        digits = only_digits(stored_reference)
+        return 4 <= len(digits) < 8
+
+    def _bdv_tx_matches_payer(self, tx, phone_key, document_key):
+        """True si la transacción pertenece al pagador del aviso."""
+        tx_phone, tx_document = tx._bestpay_get_payer_identity()
+
+        stored_phones = {
+            key for key in (
+                normalize_phone(tx_phone),
+                normalize_phone(tx.bdv_telefono_pagador),
+            ) if key
+        }
+        stored_documents = set()
+        for document in (tx_document, normalize_document(tx.bdv_cedula_pagador)):
+            if document:
+                stored_documents.update(document_variants(document))
+
+        if phone_key and set(phone_variants(phone_key)) & stored_phones:
+            return True
+
+        if document_key and set(document_variants(document_key)) & stored_documents:
+            return True
+
+        return False
+
+    def _bdv_find_transaction_for_notification(self, payload, candidate_partners=None):
+        """Busca la transacción que corresponde a un aviso del BDV.
+
+        Orden de confianza:
+        1. Referencia bancaria (solo existe si pasó por checkout o ya se casó).
+        2. Teléfono/cédula del pagador + monto + ventana de tiempo.
+        3. Monto único entre las transacciones abiertas.
+
+        Devuelve un dict con ``tx`` (vacío si no hay match), ``method``,
+        ``candidates`` y ``ambiguous``/``details`` cuando hay que revisar.
+        """
+        payload = payload or {}
+        referencia = str(payload.get('referenciaBancoOrdenante') or '').strip()
+
+        try:
+            monto = parse_amount(payload.get('monto'))
+        except (TypeError, ValueError):
+            monto = 0.0
+
+        notification_dt = parse_bank_datetime(
+            payload.get('fecha'), payload.get('hora')
+        ) or fields.Datetime.now()
+
+        phone_key = normalize_phone(payload.get('numeroCliente'))
+        document_key = normalize_document(payload.get('idCliente'))
+
+        result = {
+            'tx': self.browse(),
+            'method': False,
+            'candidates': 0,
+            'ambiguous': False,
+        }
+
+        # 1. Referencia bancaria: exacta primero. Si el pagador escribió solo
+        # una parte (la conciliación acepta desde los 4 últimos dígitos), se
+        # compara el sufijo con monto y unicidad. Si no hay referencia en la
+        # transacción, este paso no encuentra nada y sigue el casado normal.
+        if referencia:
+            tx = self.sudo().search([
+                ('provider_id.code', '=', 'bdv'),
+                ('bdv_referencia', '=', referencia),
+            ], limit=1)
+            if tx and self._bdv_tx_amount_matches(tx, monto):
+                result.update({
+                    'tx': tx,
+                    'method': 'reference',
+                    'candidates': 1,
+                })
+                return result
+            if tx:
+                _logger.warning(
+                    "[BDV NOTIFICACIÓN] La referencia %s coincide con la TX %s "
+                    "pero el monto notificado %s no coincide con %s; se ignora "
+                    "la referencia y se sigue con pagador/monto.",
+                    referencia, tx.reference, monto, tx.amount_ves,
+                )
+
+            ref_candidates = self.sudo().search([
+                ('provider_id.code', '=', 'bdv'),
+                ('bdv_referencia', '!=', False),
+                ('create_date', '<=', notification_dt + timedelta(minutes=5)),
+                (
+                    'create_date',
+                    '>=',
+                    notification_dt - timedelta(
+                        hours=self.BESTPAY_LINK_EXPIRATION_HOURS),
+                ),
+            ], order='create_date desc')
+            ref_matches = ref_candidates.filtered(
+                lambda tx: reference_matches(referencia, tx.bdv_referencia)
+                and self._bdv_tx_amount_matches(tx, monto)
+                and (
+                    not self._bdv_reference_needs_identity(tx.bdv_referencia)
+                    or self._bdv_tx_matches_payer(tx, phone_key, document_key)
+                )
+            )
+            if len(ref_matches) == 1:
+                result.update({
+                    'tx': ref_matches,
+                    'method': 'reference',
+                    'candidates': len(ref_candidates),
+                })
+                return result
+            if len(ref_matches) > 1:
+                result.update({
+                    'ambiguous': True,
+                    'candidates': len(ref_matches),
+                    'details': ref_matches,
+                })
+                return result
+
+        # 2. Identidad del pagador + monto + tiempo.
+        candidates = self._bdv_open_candidate_transactions(
+            monto, notification_dt, candidate_partners)
+        result['candidates'] = len(candidates)
+        if not candidates:
+            return result
+
+        strong_matches = candidates.filtered(
+            lambda tx: self._bdv_tx_matches_payer(tx, phone_key, document_key))
+
+        if len(strong_matches) == 1:
+            result.update({
+                'tx': strong_matches,
+                'method': 'payer_identity',
+                'candidates': len(candidates),
+            })
+            return result
+
+        if len(strong_matches) > 1:
+            result.update({
+                'ambiguous': True,
+                'candidates': len(strong_matches),
+                'details': strong_matches,
+            })
+            return result
+
+        # 3. Sin coincidencia de identidad. El monto único solo se usa si el
+        # aviso trae identidad del pagador y la transacción no tiene identidad
+        # registrada (el tercero no la envió). Si la transacción ya tiene
+        # identidad y no coincidió, no se adivina por monto: se deja para
+        # revisión.
+        if not phone_key and not document_key:
+            return result
+
+        if len(candidates) == 1:
+            candidate = candidates
+            tx_phone, tx_document = candidate._bestpay_get_payer_identity()
+            has_identity = bool(
+                tx_phone
+                or tx_document
+                or candidate.bdv_telefono_pagador
+                or candidate.bdv_cedula_pagador
+            )
+            if has_identity:
+                result.update({
+                    'ambiguous': True,
+                    'candidates': 1,
+                    'details': candidate,
+                })
+                return result
+
+            result.update({
+                'tx': candidate,
+                'method': 'amount',
+                'candidates': 1,
+            })
+        else:
+            result.update({
+                'ambiguous': True,
+                'details': candidates,
+            })
+        return result
+
+    def _bdv_apply_notification_match(self, notification, tx, payload, method, candidate_count):
+        """Confirma la transacción (o enlaza el aviso tardío) y sella el aviso."""
+        payload = payload or {}
+
+        referencia = str(payload.get('referenciaBancoOrdenante') or '').strip()
+        payer_phone_raw = str(payload.get('numeroCliente') or '').strip()
+        payer_phone_key = normalize_phone(payer_phone_raw)
+        if payer_phone_key:
+            payer_phone_raw = '0' + payer_phone_key
+
+        payer_document_raw = str(payload.get('idCliente') or '').strip()
+        payer_document_key = normalize_document(payer_document_raw)
+
+        try:
+            monto = parse_amount(payload.get('monto'))
+        except (TypeError, ValueError):
+            monto = 0.0
+
+        partner = tx.bestpay_client_id or tx.partner_id
+        now = fields.Datetime.now()
+
+        # La transacción ya estaba pagada (por checkout u otro aviso): el aviso
+        # llega tarde. Solo se enlaza para auditoría; no se vuelve a confirmar
+        # ni se dispara otro webhook al tercero.
+        if tx.state == 'done':
+            notification.write({
+                'transaction_id': tx.id,
+                'partner_id': partner.id if partner else False,
+                'status': 'matched_late',
+                'match_method': method or 'reference',
+                'candidate_count': candidate_count or 1,
+                'matched_at': now,
+                'error_message': False,
+            })
+            _logger.info(
+                "[BDV NOTIFICACIÓN] TX %s ya completada. Notificación tardía enlazada (Ref: %s)",
+                tx.id, referencia,
+            )
+            return {'codigo': '01', 'matched': True, 'late': True}
+
+        vals_to_update = {
+            'state': 'done',
+            'bdv_conciliation_state': 'approved',
+            'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
+            'bdv_referencia': referencia,
+            'bdv_importe': monto,
+            'bdv_telefono_pagador': payer_phone_raw,
+            'bdv_cedula_pagador': payer_document_raw,
+            'bdv_banco_origen': str(payload.get('bancoOrdenante') or ''),
+            'bdv_fecha_pago': self._bdv_notification_payment_date(payload),
+            'bdv_hora_pago': str(payload.get('hora') or ''),
+            'bdv_id_comercio': str(payload.get('idComercio') or ''),
+            'bdv_numero_comercio': str(payload.get('numeroComercio') or ''),
+            'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
+        }
+        if payer_phone_key and not tx.bestpay_payer_phone:
+            vals_to_update['bestpay_payer_phone'] = payer_phone_key
+        if payer_document_key and not tx.bestpay_payer_document:
+            vals_to_update['bestpay_payer_document'] = payer_document_key
+
+        tx.write(vals_to_update)
+        tx.write({'bank_notification_id': notification.id})
+
+        notification.write({
+            'transaction_id': tx.id,
+            'partner_id': partner.id if partner else False,
+            'status': 'matched',
+            'match_method': method or 'reference',
+            'candidate_count': candidate_count or 1,
+            'matched_at': now,
+            'error_message': False,
+        })
+
+        _logger.info(
+            "[BDV NOTIFICACIÓN] ✅ TX %s confirmada (Ref: %s, método: %s)",
+            tx.id, referencia, method or 'reference',
+        )
+
+        try:
+            tx._bestpay_trigger_webhook_3ro()
+        except Exception as e:
+            _logger.error(
+                "[BDV NOTIFICACIÓN] Error disparando webhook al tercero: %s", e)
+
+        return {'codigo': '00', 'matched': True}
+
+    def _bdv_link_pending_notifications_by_reference(self):
+        """Enlaza avisos pendientes con la referencia ya conocida de la TX.
+
+        Se llama después de una conciliación aprobada. No cambia el estado de
+        la transacción, no vuelve a confirmar y no dispara webhooks al tercero:
+        solo deja el aviso enlazado para auditoría (``matched_late``).
+
+        Acepta referencia exacta o parcial (últimos 4+ dígitos) cuando el monto
+        coincide y hay un único candidato.
+        """
+        self.ensure_one()
+        stored_reference = str(self.bdv_referencia or '').strip()
+        if not stored_reference:
+            return 0
+
+        Notification = self.env['bestpay.bank.notification'].sudo()
+        base_domain = [
+            ('provider_code', '=', 'bdv'),
+            ('transaction_id', '=', False),
+            ('status', 'in', ('received', 'ambiguous', 'orphan')),
+        ]
+
+        notifications = Notification.search(
+            base_domain + [('external_ref', '=', stored_reference)])
+        if notifications:
+            notifications = notifications.filtered(
+                lambda notification: self._bdv_tx_amount_matches(
+                    self, notification.amount or 0.0))
+        if not notifications:
+            recent = fields.Datetime.now() - timedelta(
+                hours=self.BESTPAY_LINK_EXPIRATION_HOURS)
+            candidates = Notification.search(
+                base_domain + [('received_at', '>=', recent)],
+                order='received_at DESC',
+                limit=50,
+            )
+            notifications = candidates.filtered(
+                lambda notification: reference_matches(
+                    notification.external_ref, stored_reference)
+                and self._bdv_tx_amount_matches(self, notification.amount or 0.0)
+                and (
+                    not self._bdv_reference_needs_identity(stored_reference)
+                    or self._bdv_tx_matches_payer(
+                        self,
+                        notification.payer_phone_key
+                        or normalize_phone(notification.payer_phone),
+                        notification.payer_document_key
+                        or normalize_document(notification.payer_document),
+                    )
+                )
+            )
+            if len(notifications) > 1:
+                _logger.warning(
+                    "[BDV CONCILIACIÓN] La referencia '%s' coincide con %s "
+                    "avisos; no se enlaza automáticamente.",
+                    stored_reference, len(notifications),
+                )
+                return 0
+
+        if not notifications:
+            return 0
+
+        partner = self.bestpay_client_id or self.partner_id
+        now = fields.Datetime.now()
+        for notification in notifications:
+            notification.write({
+                'transaction_id': self.id,
+                'partner_id': partner.id if partner else False,
+                'status': 'matched_late',
+                'match_method': 'reference',
+                'candidate_count': 1,
+                'matched_at': now,
+                'error_message': False,
+            })
+            _logger.info(
+                "[BDV CONCILIACIÓN] Aviso %s enlazado tardíamente a TX %s.",
+                notification.external_ref, self.reference,
+            )
+
+        if not self.bank_notification_id:
+            self.write({'bank_notification_id': notifications[:1].id})
+
+        return len(notifications)
+
+    def bdv_process_notification_webhook(self, payload, candidate_partners=None, notification=None):
+        """Procesa un aviso del BDV y lo casa con su transacción.
+
+        ``candidate_partners`` es el conjunto de clientes que comparten el
+        comercio (puede ser uno o varios). La decisión final NO se toma por el
+        teléfono del comercio: se toma por la transacción encontrada.
+        """
+        payload = payload or {}
+
+        if candidate_partners is None:
+            candidate_partners = self.env['res.partner']
+        elif isinstance(candidate_partners, (list, tuple)):
+            candidate_partners = self.env['res.partner'].browse(candidate_partners)
+
+        referencia = str(payload.get('referenciaBancoOrdenante') or '').strip()
+
+        if not notification:
+            notification = self.env['bestpay.bank.notification'].sudo().search([
+                ('external_ref', '=', referencia),
+                ('provider_code', '=', 'bdv'),
+            ], limit=1, order='received_at DESC')
+
+        if not notification:
+            notification, _created = (
+                self.env['bestpay.bank.notification'].sudo()
+                ._bestpay_get_or_create_from_bdv_payload(payload)
+            )
+
+        # Re-notificación de un aviso ya casado: no se reprocesa.
+        if notification.transaction_id and notification.status in ('matched', 'matched_late'):
+            return {
+                'codigo': '01',
+                'matched': True,
+                'already_matched': True,
+                'status': notification.status,
+            }
+
+        match = self._bdv_find_transaction_for_notification(
+            payload, candidate_partners)
+
+        if not match['tx']:
+            if match.get('ambiguous'):
+                details = match.get('details') or self.browse()
+                candidate_refs = ', '.join(details.mapped('reference')[:10])
+                notification.write({
+                    'status': 'ambiguous',
+                    'match_method': False,
+                    'candidate_count': match.get('candidates', 0),
+                    'matched_at': False,
+                    'error_message': (
+                        'Varias transacciones abiertas coinciden con el aviso. '
+                        'Candidatas: %s' % (candidate_refs or '-')
+                    ),
+                })
+                _logger.warning(
+                    "[BDV NOTIFICACIÓN] ⚠️ Aviso ambiguo. Referencia: %s, "
+                    "candidatas: %s", referencia, candidate_refs or '-',
+                )
+                log_business_error(
+                    self.env,
+                    'bdv_process_notification_webhook',
+                    input_data={
+                        'referencia': referencia,
+                        'monto': payload.get('monto'),
+                        'candidatas': candidate_refs,
+                    },
+                    output_data=(
+                        'Llegó un pago del BDV que coincide con varias '
+                        'transacciones abiertas (referencia %s, monto %s). '
+                        'Quedó como notificación ambigua para revisión.'
+                        % (referencia or '-', payload.get('monto') or '-')
+                    ),
+                    is_error=True,
+                    error_type='BDVAmbiguousNotification',
+                    dedupe_key='bdv_ambiguous_notification:%s' % (
+                        referencia or 'sin-referencia'),
+                    dedupe_minutes=1440,
+                    meta={
+                        'proveedor': 'bdv',
+                        'referencia': referencia,
+                        'monto': payload.get('monto'),
+                        'candidatas': candidate_refs,
+                    },
+                )
+                return {
+                    'codigo': '00',
+                    'matched': False,
+                    'status': 'ambiguous',
+                }
+
+            notification.write({
+                'status': 'orphan',
+                'match_method': False,
+                'candidate_count': match.get('candidates', 0),
+                'matched_at': False,
+                'error_message': (
+                    'No se encontró una transacción abierta que coincida con '
+                    'el aviso (monto, teléfono/cédula y fecha).'
+                ),
+            })
+            _logger.warning(
+                "[BDV NOTIFICACIÓN] ⚠️ No se encontró una transacción previa "
+                "para casar. Referencia: %s, Tel: %s, Monto: %s. Queda como "
+                "notificación huérfana.",
+                referencia, payload.get('numeroCliente'),
+                payload.get('monto'),
+            )
+            log_business_error(
+                self.env,
+                'bdv_process_notification_webhook',
+                input_data={
+                    'referencia': referencia,
+                    'monto': payload.get('monto'),
+                    'comercio': notification.merchant_phone or False,
+                },
+                output_data=(
+                    'Llegó una notificación de pago del BDV sin transacción '
+                    'que casar (referencia %s, monto %s). Quedó como '
+                    'notificación huérfana.' % (
+                        referencia or '-', payload.get('monto') or '-')
+                ),
+                is_error=True,
+                error_type='BDVOrphanNotification',
+                dedupe_key='bdv_orphan_notification:%s' % (
+                    referencia or 'sin-referencia'),
+                dedupe_minutes=1440,
+                meta={
+                    'proveedor': 'bdv',
+                    'referencia': referencia,
+                    'monto': payload.get('monto'),
+                    'comercio': notification.merchant_phone or False,
+                },
+            )
+            return {
+                'codigo': '00',
+                'matched': False,
+                'status': 'orphan',
+            }
+
+        return self._bdv_apply_notification_match(
+            notification,
+            match['tx'],
+            payload,
+            match['method'],
+            match['candidates'],
+        )
+
+    def _bdv_attempt_auto_match_notification(self, phone=None, amount=None):
+        """Casa un aviso pendiente con esta transacción desde el checkout.
+
+        El pagador está activo en el checkout de esta transacción, así que el
+        teléfono del pagador + monto es una señal fuerte incluso si el aviso
+        había quedado ambiguo.
         """
         self.ensure_one()
         if self.state == 'done':
             return True
 
         target_amount = round(float(amount or self.amount_ves or self.amount), 2)
-        target_phone = phone or self.bdv_telefono_pagador or ''
+        target_phone_key = normalize_phone(phone or self.bdv_telefono_pagador or '')
+        if not target_phone_key:
+            target_phone_key, _document = self._bestpay_get_payer_identity()
 
-        domain = [
+        # 1. Referencia: si el checkout ya la tiene, es la señal más fuerte.
+        if self.bdv_referencia:
+            recent = fields.Datetime.now() - timedelta(
+                hours=self.BESTPAY_LINK_EXPIRATION_HOURS)
+            reference_notifications = self.env['bestpay.bank.notification'].sudo().search([
+                ('provider_code', '=', 'bdv'),
+                ('status', 'in', ('received', 'ambiguous', 'orphan')),
+                ('transaction_id', '=', False),
+                ('received_at', '>=', recent),
+            ], order='received_at DESC', limit=50)
+            reference_matches_found = reference_notifications.filtered(
+                lambda notification: reference_matches(
+                    notification.external_ref, self.bdv_referencia)
+                and abs((notification.amount or 0.0) - target_amount) <= 0.01
+                and (
+                    not self._bdv_reference_needs_identity(self.bdv_referencia)
+                    or self._bdv_tx_matches_payer(
+                        self,
+                        notification.payer_phone_key
+                        or normalize_phone(notification.payer_phone),
+                        notification.payer_document_key
+                        or normalize_document(notification.payer_document),
+                    )
+                )
+            )
+            if len(reference_matches_found) == 1:
+                payload = {}
+                try:
+                    payload = json.loads(
+                        reference_matches_found.raw_payload or '{}')
+                except (TypeError, ValueError):
+                    payload = {}
+                result = self._bdv_apply_notification_match(
+                    reference_matches_found, self, payload,
+                    'checkout_polling', 1)
+                return bool(result.get('matched'))
+
+        # 2. Teléfono del pagador + monto.
+        if not target_phone_key:
+            return False
+
+        notifications = self.env['bestpay.bank.notification'].sudo().search([
             ('provider_code', '=', 'bdv'),
-            ('status', '=', 'received'),
-            ('partner_id', '=', self.partner_id.id),
-            ('amount', '=', target_amount),
-        ]
+            ('status', 'in', ('received', 'ambiguous')),
+            ('transaction_id', '=', False),
+            ('amount', '>=', round(target_amount - 0.01, 2)),
+            ('amount', '<=', round(target_amount + 0.01, 2)),
+        ], order='received_at DESC', limit=20)
 
-        if target_phone:
-            domain.append(('payer_phone', '=', target_phone))
-
-        notification = self.env['bestpay.bank.notification'].sudo().search(
-            domain,
-            order='received_at DESC',
-            limit=1
-        )
+        notification = None
+        for candidate in notifications:
+            candidate_phone = (
+                candidate.payer_phone_key
+                or normalize_phone(candidate.payer_phone)
+            )
+            if candidate_phone and candidate_phone == target_phone_key:
+                notification = candidate
+                break
 
         if not notification:
             return False
 
-        _logger.info(
-            "[BDV AUTO-MATCH] Notificación #%s casada con Transacción %s (Ref: %s, Monto: %s)",
-            notification.id, self.id, notification.external_ref, notification.amount
-        )
-
-        payload_data = {}
-        if notification.raw_payload:
-            try:
-                payload_data = json.loads(notification.raw_payload)
-            except Exception:
-                payload_data = {}
-
-        vals_to_update = {
-            'state': 'done',
-            'bdv_conciliation_state': 'approved',
-            'bdv_conciliation_message': 'Casado automático vía notificación bancaria BDV',
-            'bdv_referencia': notification.external_ref or self.bdv_referencia,
-            'bdv_importe': notification.amount,
-            'bank_notification_id': notification.id,
-            'bdv_raw_payload': notification.raw_payload,
-            'bdv_id_comercio': payload_data.get('idComercio', ''),
-            'bdv_numero_comercio': payload_data.get('numeroComercio', ''),
-            'bdv_hora_pago': payload_data.get('hora', ''),
-            'bdv_banco_origen': payload_data.get('bancoOrdenante', self.bdv_banco_origen or ''),
-        }
-        if target_phone:
-            vals_to_update['bdv_telefono_pagador'] = target_phone
-        if payload_data.get('idCliente'):
-            vals_to_update['bdv_cedula_pagador'] = payload_data.get('idCliente')
-
-        self.write(vals_to_update)
-
-        notification.write({
-            'transaction_id': self.id,
-            'status': 'matched',
-        })
-
+        payload = {}
         try:
-            self._bestpay_trigger_webhook_3ro()
-        except Exception as e:
-            _logger.error("[BDV AUTO-MATCH] Error disparando webhook al tercero: %s", e)
+            payload = json.loads(notification.raw_payload or '{}')
+        except (TypeError, ValueError):
+            payload = {}
 
-        return True
-
-    def bdv_process_notification_webhook(self, payload, partner):
-        """
-        Procesa la notificación del BDV buscando la transacción por referencia (única).
-        """
-        # 1. Extraer y normalizar datos
-        telefono_pagador = payload.get('numeroCliente', '').strip()
-        monto_str = payload.get('monto', '0.0')
-        referencia = payload.get('referenciaBancoOrdenante', '').strip()
-        cedula_pagador = payload.get('idCliente', '').strip()
-        banco_origen = payload.get('bancoOrdenante', '').strip()
-
-        try:
-            monto = float(monto_str)
-        except (ValueError, TypeError):
-            monto = 0.0
-
-        # Normalizar teléfono (asegurar que empiece con 0)
-        if telefono_pagador and not telefono_pagador.startswith('0'):
-            telefono_pagador = '0' + telefono_pagador
-
-        _logger.info(f"[BDV NOTIFICACIÓN] Procesando: Referencia={referencia}, Tel={telefono_pagador}, Monto={monto}")
-
-        # ==========================================================
-        # BÚSQUEDA: 1. Por Referencia | 2. Por Teléfono + Monto pendiente
-        # ==========================================================
-        tx = False
-        if referencia:
-            tx = self.search([
-                ('bdv_referencia', '=', referencia),
-            ], limit=1)
-            if tx:
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} encontrada por referencia: {referencia}")
-
-        if not tx and partner and telefono_pagador:
-            monto_float = float(monto or 0.0)
-            tx = self.search([
-                ('partner_id', '=', partner.id),
-                ('state', 'not in', ['done', 'cancel', 'error']),
-                ('amount_ves', '>=', monto_float - 0.5),
-                ('amount_ves', '<=', monto_float + 0.5),
-                '|',
-                ('bdv_telefono_pagador', '=', telefono_pagador),
-                ('payment_request_payload', 'ilike', telefono_pagador),
-            ], order='create_date desc', limit=1)
-            if tx:
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} enlazada por Teléfono ({telefono_pagador}) y Monto ({monto_float})")
-
-        # ==========================================================
-        # ESCENARIO A: Transacción encontrada
-        # ==========================================================
-# ==========================================================
-        # CASADO Y ACTUALIZACIÓN MUTUAMENTE EXCLUYENTE
-        # ==========================================================
-        if tx:
-            # Si ya está confirmada previamente
-            if tx.state == 'done':
-                _logger.info(f"[BDV NOTIFICACIÓN] TX {tx.id} ya completada. Enlazando notificación tardía.")
-                late_notification = self.env['bestpay.bank.notification'].sudo().search([
-                    ('partner_id', '=', partner.id),
-                    ('external_ref', '=', referencia),
-                    ('status', '=', 'received'),
-                    ('provider_code', '=', 'bdv'),
-                ], limit=1, order='received_at DESC')
-                if late_notification:
-                    late_notification.write({
-                        'transaction_id': tx.id,
-                        'status': 'matched_late',
-                    })
-                return {'codigo': '01'}
-
-            # Extraer fecha
-            fecha_raw = payload.get('fecha', '')
-            try:
-                fecha_pago = datetime.strptime(fecha_raw, '%Y%m%d').date() if fecha_raw else fields.Date.today()
-            except Exception:
-                fecha_pago = fields.Date.today()
-
-            # Escribir datos bancarios y confirmar la transacción existente
-            tx.write({
-                'state': 'done',
-                'bdv_conciliation_state': 'approved',
-                'bdv_conciliation_message': 'Aprobado vía webhook notificación BDV',
-                'bdv_referencia': referencia,
-                'bdv_importe': float(monto or 0.0),
-                'bdv_telefono_pagador': telefono_pagador,
-                'bdv_cedula_pagador': cedula_pagador,
-                'bdv_banco_origen': banco_origen,
-                'bdv_fecha_pago': fecha_pago,
-                'bdv_hora_pago': payload.get('hora', ''),
-                'bdv_id_comercio': payload.get('idComercio', ''),
-                'bdv_numero_comercio': payload.get('numeroComercio', ''),
-                'bdv_raw_payload': json.dumps(payload, ensure_ascii=False),
-            })
-
-            # Enlazar con registro de notificación bancaria
-            notification = self.env['bestpay.bank.notification'].sudo().search([
-                ('partner_id', '=', partner.id),
-                ('external_ref', '=', referencia),
-                ('status', '=', 'received'),
-                ('provider_code', '=', 'bdv'),
-            ], limit=1, order='received_at DESC')
-
-            if notification:
-                notification.write({
-                    'transaction_id': tx.id,
-                    'status': 'matched',
-                })
-                tx.write({'bank_notification_id': notification.id})
-
-            _logger.info(f"[BDV NOTIFICACIÓN] ✅ TX {tx.id} actualizada y confirmada (Referencia: {referencia})")
-
-            try:
-                tx._bestpay_trigger_webhook_3ro()
-            except Exception as e:
-                _logger.error(f"[BDV NOTIFICACIÓN] Error disparando webhook al tercero: {e}")
-
-            return {'codigo': '00'}
-
-        else:
-            # ==========================================================
-            # ESCENARIO B: NO EXISTE TRANSACCIÓN PREVIA
-            # ==========================================================
-            # CORRECCIÓN: No creamos una transacción nueva desde el webhook.
-            # Si no hay una TX previa generada por el e-commerce (Koole), 
-            # la notificación se queda en el menú "Notificaciones" con transaction_id = False.
-            # Esto evita transacciones "fantasma" en el módulo de contabilidad.
-            
-            _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ No se encontró una transacción previa para casar. Referencia: {referencia}, Tel: {telefono_pagador}, Monto: {monto}. Se guarda solo como Notificación sin enlazar.")
-
-            # Dinero recibido sin transacción que casar: es el caso más
-            # importante de revisar. Se avisa con dedupe por referencia para
-            # que las re-notificaciones del banco no lo repitan.
-            log_business_error(
-                self.env,
-                'bdv_process_notification_webhook',
-                input_data={
-                    'referencia': referencia,
-                    'monto': monto,
-                    'comercio': partner.name if partner else False,
-                },
-                output_data=(
-                    'Llegó una notificación de pago del BDV sin transacción '
-                    'que casar (referencia %s, monto %s). Quedó como '
-                    'notificación huérfana.' % (referencia or '-', monto)
-                ),
-                is_error=True,
-                error_type='BDVOrphanNotification',
-                dedupe_key='bdv_orphan_notification:%s' % (referencia or 'sin-referencia'),
-                dedupe_minutes=1440,
-                meta={
-                    'proveedor': 'bdv',
-                    'referencia': referencia,
-                    'monto': monto,
-                    'comercio': partner.name if partner else False,
-                },
-            )
-
-            # Devolvemos '00' para que el banco registre que recibimos el aviso,
-            # pero internamente sabemos que quedó como notificación huérfana.
-            return {'codigo': '00'}
+        result = self._bdv_apply_notification_match(
+            notification, self, payload, 'checkout_polling', 1)
+        return bool(result.get('matched'))

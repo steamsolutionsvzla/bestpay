@@ -4,11 +4,16 @@ import logging
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
+from odoo.addons.bestpay.utils.identity import phone_variants
+
 _logger = logging.getLogger(__name__)
 
 
 class ResPartnerBDV(models.Model):
     _inherit = 'res.partner'
+
+    # Clave de respaldo de QA que el banco documentó para pruebas.
+    BDV_QA_NOTIFICATION_KEY = '97F6F54EF1A84F3A24FE19A3B338C77A'
 
     # =====================================================
     # CAMPOS ESPECÍFICOS DEL BANCO DE VENEZUELA (Por Comercio)
@@ -79,6 +84,80 @@ class ResPartnerBDV(models.Model):
         groups="base.group_system",
         copy=False,
     )
+
+    # =====================================================
+    # RESOLUCIÓN DEL COMERCIO/CLIENTE PARA NOTIFICACIONES
+    # =====================================================
+    def _bdv_notification_key(self, env_type='qa'):
+        """API key de notificación del partner según el ambiente."""
+        self.ensure_one()
+        if (env_type or 'qa').strip().lower() == 'prod':
+            return str(self.bdv_api_key_prod or '').strip()
+        return str(self.bdv_api_key_notification or '').strip()
+
+    @api.model
+    def _bdv_find_notification_partners(self, numero_comercio, api_key='', env_type='qa'):
+        """Partners candidatos para un aviso del BDV.
+
+        Combina dos señales:
+        - el teléfono del comercio (puede apuntar a uno o varios clientes), y
+        - la API key del webhook (identifica la cuenta aunque el teléfono esté
+          mal configurado).
+
+        Devolver varios partners es intencional: en una cuenta compartida el
+        teléfono no alcanza para decidir. El motor de casado usa la
+        transacción para elegir el partner correcto.
+        """
+        partners = self.browse()
+        phone = str(numero_comercio or '').strip()
+        if phone:
+            # Acepta el teléfono tal cual o con formatos equivalentes
+            # (0416..., 416..., +58 416...).
+            variants = set(phone_variants(phone))
+            variants.add(phone)
+            partners = self.sudo().search([
+                '|',
+                ('bdv_telefono_destino', 'in', list(variants)),
+                ('bdv_telefono_notificacion', 'in', list(variants)),
+            ])
+
+        key = str(api_key or '').strip()
+        if key:
+            key_field = (
+                'bdv_api_key_prod'
+                if (env_type or 'qa').strip().lower() == 'prod'
+                else 'bdv_api_key_notification'
+            )
+            partners |= self.sudo().search([(key_field, '=', key)])
+
+        return partners
+
+    @api.model
+    def _bdv_notification_key_is_valid(self, partners, api_key, env_type='qa'):
+        """Valida la API key del webhook contra los candidatos.
+
+        Si algún candidato tiene una key configurada, la recibida debe coincidir
+        con alguna. Si ninguno tiene key (comercio nuevo o QA sin configurar),
+        se mantiene el fallback histórico de QA.
+        """
+        api_key = str(api_key or '').strip()
+        if not api_key:
+            return False
+
+        configured_keys = []
+        for partner in partners:
+            key = partner._bdv_notification_key(env_type)
+            if key:
+                configured_keys.append(key)
+
+        if configured_keys:
+            return api_key in configured_keys
+
+        return (
+            (env_type or 'qa').strip().lower() != 'prod'
+            and api_key == self.BDV_QA_NOTIFICATION_KEY
+        )
+
 
         # =================================================================
     # 🔔 CONFIGURACIÓN DE WEBHOOK AL TERCERO (BestPay → Koole/ecommerce)

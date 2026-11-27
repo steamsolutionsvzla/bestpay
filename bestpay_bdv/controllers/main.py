@@ -432,6 +432,22 @@ class BestpayBDVController(http.Controller):
             is_approved = transaction.bdv_send_conciliation()
             
             if is_approved:
+                # La conciliación ya confirmó la transacción. Ahora se enlazan
+                # los avisos que hayan llegado antes y hayan quedado pendientes.
+                # Nunca debe afectar el resultado del cobro.
+                try:
+                    linked = transaction._bdv_link_pending_notifications_by_reference()
+                    if linked:
+                        _logger.info(
+                            "[BDV] %s aviso(s) pendiente(s) enlazado(s) a la TX %s "
+                            "después de la conciliación.",
+                            linked, transaction.reference,
+                        )
+                except Exception as e:
+                    _logger.error(
+                        "[BDV] No se pudieron enlazar avisos pendientes para la "
+                        "TX %s: %s", transaction.reference, e,
+                    )
                 return self._bestpay_render_result(
                     transaction,
                     'success',
@@ -525,135 +541,98 @@ class BestpayBDVController(http.Controller):
                     status=200, content_type='application/json', headers=cors_headers
                 )
 
-            # 3. Identificar el comercio receptor
-            numero_comercio = payload.get('numeroComercio', '')
+            # 3. Identificar el comercio receptor y los clientes candidatos
+            numero_comercio = str(payload.get('numeroComercio') or '').strip()
             _logger.warning(f"[BDV NOTIFICACIÓN] numeroComercio recibido: '{numero_comercio}'")
 
-            # 4. Buscar el Partner
-            partner = request.env['res.partner'].sudo().search([
-                '|',
-                ('bdv_telefono_destino', '=', numero_comercio),
-                ('bdv_telefono_notificacion', '=', numero_comercio)
+            provider = request.env['payment.provider'].sudo().search([
+                ('code', '=', 'bdv'),
+                ('is_bestpay_provider', '=', True),
             ], limit=1)
-            
-            if partner:
-                _logger.warning(f"[BDV NOTIFICACIÓN] ✅ Partner encontrado: {partner.name} (ID: {partner.id})")
-                _logger.warning(f"[BDV NOTIFICACIÓN] bdv_api_key_notification: '{partner.bdv_api_key_notification}'")
-                _logger.warning(f"[BDV NOTIFICACIÓN] bdv_api_key_prod: '{partner.bdv_api_key_prod}'")
+            env_type = (provider.bdv_environment if provider else 'qa') or 'qa'
+            _logger.warning(f"[BDV NOTIFICACIÓN] Entorno detectado en Provider: {env_type}")
+
+            # El teléfono del comercio puede apuntar a uno o varios clientes
+            # (cuenta compartida). La API key también identifica la cuenta.
+            Partners = request.env['res.partner'].sudo()
+            partner_candidates = Partners._bdv_find_notification_partners(
+                numero_comercio, api_key_header, env_type)
+
+            if partner_candidates:
+                _logger.warning(
+                    "[BDV NOTIFICACIÓN] Candidatos por comercio/key: %s",
+                    ', '.join(partner_candidates.mapped('name')),
+                )
             else:
-                _logger.warning(f"[BDV NOTIFICACIÓN] ❌ NO se encontró ningún partner con el teléfono: '{numero_comercio}'")
-                # Puede ser un comercio nuevo sin configurar o un intento
-                # externo. Se registra para diagnóstico, sin alertar al grupo.
+                _logger.warning(
+                    "[BDV NOTIFICACIÓN] ❌ NO se encontró ningún partner con el "
+                    "teléfono '%s' ni con la API key recibida.", numero_comercio)
+                # Comercio nuevo sin configurar o intento externo. Se registra
+                # para diagnóstico, sin alertar al grupo.
                 log_business_error(
                     request.env,
                     'bdv_webhook_notify',
                     input_data={'numero_comercio': numero_comercio},
                     output_data=(
                         'No se encontró un comercio con el teléfono de '
-                        'notificación %s.' % numero_comercio
+                        'notificación %s ni con la API key recibida.'
+                        % (numero_comercio or '-')
                     ),
                     is_error=False,
                     http=True,
                     meta={'proveedor': 'bdv'},
                 )
 
-            # 5. Validar API Key según el entorno del proveedor (QA vs Producción)
-            api_key_valida = False
-            if partner:
-                # Buscar el provider BDV para saber en qué entorno estamos
-                provider = request.env['payment.provider'].sudo().search([
-                    ('code', '=', 'bdv'),
-                    ('is_bestpay_provider', '=', True),
-                ], limit=1)
-                
-                env_type = provider.bdv_environment if provider else 'qa'
-                _logger.warning(f"[BDV NOTIFICACIÓN] Entorno detectado en Provider: {env_type}")
-
-                if env_type == 'prod':
-                    # En Producción, el BDV usa una sola API Key para todo
-                    api_key_configurada = partner.bdv_api_key_prod or ''
-                    _logger.warning(f"[BDV NOTIFICACIÓN] Usando API Key de Producción (bdv_api_key_prod)")
-                else:
-                    # En QA, usamos la key específica de notificación o el fallback
-                    api_key_configurada = partner.bdv_api_key_notification or '97F6F54EF1A84F3A24FE19A3B338C77A'
-                    _logger.warning(f"[BDV NOTIFICACIÓN] Usando API Key de QA (bdv_api_key_notification)")
-
-                if api_key_configurada:
-                    api_key_valida = (api_key_header == api_key_configurada)
-                    if api_key_valida:
-                        _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente")
-                    else:
-                        _logger.warning(f"[BDV NOTIFICACIÓN] ⚠️ API Key NO coincide. Recibida: '{api_key_header}', Configurada: '{api_key_configurada}'")
-                else:
-                    _logger.warning(f"[BDV NOTIFICACIÓN] ❌ El partner no tiene API Key configurada para el entorno {env_type}")
-            else:
-                # Respaldo para QA si no se encontró partner
-                api_key_valida = (api_key_header == '97F6F54EF1A84F3A24FE19A3B338C77A')
-                if not api_key_valida:
-                    _logger.warning(f"[BDV NOTIFICACIÓN] ️ API Key NO coincide con el fallback de QA")
+            # 4. Validar API Key contra los candidatos (o el fallback de QA)
+            api_key_valida = Partners._bdv_notification_key_is_valid(
+                partner_candidates, api_key_header, env_type)
 
             if not api_key_valida:
-                _logger.warning(f"[BDV NOTIFICACIÓN]  Bloqueado por API Key inválida")
+                _logger.warning("[BDV NOTIFICACIÓN] Bloqueado por API Key inválida")
                 return Response(
                     json.dumps({"codigo": "99", "mensajeCliente": "Corrija el API KEY", "mensajeSistema": "Error en API KEY"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
 
-            _logger.warning(f"[BDV NOTIFICACIÓN] ✅ API Key validada correctamente. Pasando al modelo...")
+            _logger.warning("[BDV NOTIFICACIÓN] ✅ API Key validada correctamente. Pasando al modelo...")
 
-            # ==========================================
-            # 📝 GUARDAR O ACTUALIZAR NOTIFICACIÓN (IDEMPOTENCIA)
-            # ==========================================
-            existing_notification = False # Variable de control
-            try:
-                external_ref = payload.get('referenciaBancoOrdenante', '')
-                tel_crudo = str(payload.get('numeroCliente', '')).strip()
-                if tel_crudo and not tel_crudo.startswith('0'):
-                    tel_crudo = '0' + tel_crudo
+            # 5. Guardar/actualizar la notificación. Nace sin partner: el
+            # partner se asigna recién cuando se encuentra la transacción.
+            notification, _created = (
+                request.env['bestpay.bank.notification'].sudo()
+                ._bestpay_get_or_create_from_bdv_payload(payload)
+            )
 
-                # Buscar si YA existe una notificación con esta referencia
-                existing_notification = request.env['bestpay.bank.notification'].sudo().search([
-                    ('external_ref', '=', external_ref),
-                    ('provider_code', '=', 'bdv'),
-                ], limit=1)
-
-                if existing_notification:
-                    # Ya existe → NO actualizar received_at (debe mantener la fecha original)
-                    # Solo logueamos que llegó una re-notificación
-                    _logger.info(f"[BDV] Re-notificación detectada. Referencia: {external_ref}. No se crea duplicado. Fecha original mantenida: {existing_notification.received_at}")
-                else:
-                    # No existe → Crear nueva
-                    request.env['bestpay.bank.notification'].sudo().create({
-                        'provider_code': 'bdv',
-                        'partner_id': partner.id if partner else False,
-                        'payer_phone': tel_crudo,
-                        'external_ref': external_ref,
-                        'amount': float(payload.get('monto', 0) or 0),
-                        'status': 'received',
-                        'raw_payload': json.dumps(payload, ensure_ascii=False, indent=2),
-                    })
-                    _logger.info(f"[BDV] Nueva notificación creada. Referencia: {external_ref}")
-                    
-            except Exception as e:
-                _logger.warning(f"[BDV] No se pudo guardar/actualizar Notificación: {e}")
-            # ==========================================
-
-            # 6. Delegar la lógica de negocio al modelo
-            resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(payload, partner)
-
-            # 7. Responder al BDV (IDEMPOTENCIA)
-            if existing_notification or resultado.get('codigo') == '01':
-                # Si ya existía en BD o el modelo nos dijo que la TX ya estaba pagada
+            if notification.status in ('matched', 'matched_late'):
+                _logger.info(
+                    "[BDV] Re-notificación de un aviso ya casado. Referencia: %s",
+                    notification.external_ref,
+                )
                 return Response(
                     json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
-            else:
-                # Primera vez y procesada correctamente
+
+            # 6. Delegar la lógica de negocio al modelo. Se pasa el conjunto de
+            # candidatos, no un único partner: el teléfono del comercio no
+            # alcanza cuando varios clientes comparten la cuenta.
+            resultado = request.env['payment.transaction'].sudo().bdv_process_notification_webhook(
+                payload, partner_candidates, notification=notification)
+
+            # 7. Responder al BDV (IDEMPOTENCIA)
+            if resultado.get('codigo') == '01':
                 return Response(
-                    json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
+                    json.dumps({"codigo": "01", "mensajeCliente": "pago previamente recibido", "mensajeSistema": "renotificado"}),
                     status=200, content_type='application/json', headers=cors_headers
                 )
+
+            # Primera vez procesado (casado, ambiguo u huérfano). Se responde 00
+            # para que el banco no reintente; el estado interno queda en la
+            # notificación para revisión.
+            return Response(
+                json.dumps({"codigo": "00", "mensajeCliente": "Aprobado", "mensajeSistema": "Notificado"}),
+                status=200, content_type='application/json', headers=cors_headers
+            )
         except Exception as e:
             _logger.error(f"[BDV NOTIFICACIÓN] Error inesperado: {e}", exc_info=True)
             if not is_logged(e):

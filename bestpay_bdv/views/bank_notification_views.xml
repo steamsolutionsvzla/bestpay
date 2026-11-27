@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_bestpay_bank_notification_form_bdv" model="ir.ui.view">
+        <field name="name">bestpay.bank.notification.form.bdv</field>
+        <field name="model">bestpay.bank.notification</field>
+        <field name="inherit_id" ref="bestpay.view_bestpay_bank_notification_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_bdv_retry_match"
+                        string="Reintentar casado"
+                        type="object"
+                        class="btn-primary"
+                        invisible="provider_code != 'bdv' or status in ('matched', 'matched_late')"/>
+                <button name="action_bdv_open_assign_wizard"
+                        string="Asignar manualmente"
+                        type="object"
+                        class="btn-secondary"
+                        invisible="provider_code != 'bdv' or status in ('matched', 'matched_late')"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_bestpay_bdv_assign_notification_wizard_form" model="ir.ui.view">
+        <field name="name">bestpay.bdv.assign.notification.wizard.form</field>
+        <field name="model">bestpay.bdv.assign.notification.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Asignar notificación del BDV">
+                <sheet>
+                    <div class="alert alert-info" role="alert">
+                        Usa esta pantalla solo para el remanente que no se pudo casar
+                        automáticamente. Verifica que el monto y el pagador correspondan
+                        a la transacción seleccionada.
+                    </div>
+                    <group>
+                        <group string="Aviso del banco">
+                            <field name="external_ref"/>
+                            <field name="amount"/>
+                            <field name="payer_phone"/>
+                            <field name="payer_document"/>
+                            <field name="merchant_phone"/>
+                        </group>
+                        <group string="Transacción destino">
+                            <field name="transaction_id" options="{'no_create': True}"/>
+                        </group>
+                    </group>
+                    <group string="Auditoría">
+                        <field name="note" placeholder="Motivo de la asignación manual"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_assign" string="Asignar y confirmar" type="object" class="btn-primary"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

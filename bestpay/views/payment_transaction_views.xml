@@ -30,6 +30,8 @@
                                 <field name="bestpay_client_id" readonly="1"/>
                                 <field name="external_reference" readonly="1"/>
                                 <field name="client_note" readonly="1"/>
+                                <field name="bestpay_payer_phone" readonly="1" invisible="not bestpay_payer_phone"/>
+                                <field name="bestpay_payer_document" readonly="1" invisible="not bestpay_payer_document"/>
                             </group>
                             <group string="Flujo y datos del Banco">
                                 <field name="bestpay_flow_type" readonly="1"/>

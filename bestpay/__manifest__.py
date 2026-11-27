@@ -1,6 +1,6 @@
 {
     'name': 'BestPay',
-    'version': '19.0.1.1.1',
+    'version': '19.0.1.2.0',
     'category': 'Accounting/Payment',
     'summary': 'Módulo de integración de pagos BestPay',
     'description': 'Verificador de pagos y enlaces de pago para Steam Solutions',

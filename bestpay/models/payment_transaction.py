@@ -7,6 +7,7 @@ from datetime import timedelta
 from odoo import models, fields, api, _
 
 from ..utils.business_logger import log_business_error
+from ..utils.identity import extract_payer_identity
 
 _logger = logging.getLogger(__name__)
 
@@ -264,13 +265,55 @@ class PaymentTransaction(models.Model):
             if not vals.get('uuid_hash'):
                 vals['uuid_hash'] = secrets.token_urlsafe(32)
 
-            if 'payment_request_payload' in vals and isinstance(vals['payment_request_payload'], (dict, list)):
-                try:
-                    vals['payment_request_payload'] = json.dumps(vals['payment_request_payload'], ensure_ascii=False, indent=4)
-                except Exception as e:
-                    _logger.error("[BESTPAY] No se pudo serializar el payload del tercero: %s", e)
-                
+            if 'payment_request_payload' in vals:
+                payload = vals['payment_request_payload']
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except (TypeError, ValueError):
+                        payload = {}
+
+                if isinstance(payload, dict):
+                    payer_phone, payer_document = extract_payer_identity(payload)
+                    if payer_phone and not vals.get('bestpay_payer_phone'):
+                        vals['bestpay_payer_phone'] = payer_phone
+                    if payer_document and not vals.get('bestpay_payer_document'):
+                        vals['bestpay_payer_document'] = payer_document
+
+                if isinstance(payload, (dict, list)):
+                    try:
+                        vals['payment_request_payload'] = json.dumps(
+                            payload, ensure_ascii=False, indent=4)
+                    except Exception as e:
+                        _logger.error(
+                            "[BESTPAY] No se pudo serializar el payload del tercero: %s", e)
+
         return super(PaymentTransaction, self).create(vals_list)
+
+    def _bestpay_get_payer_identity(self):
+        """Devuelve (teléfono, documento) normalizados del pagador.
+
+        Usa los campos indexados y, para transacciones antiguas que todavía no
+        los tienen, los extrae en caliente del payload original.
+        """
+        self.ensure_one()
+        phone = self.bestpay_payer_phone or ''
+        document = self.bestpay_payer_document or ''
+
+        if (not phone or not document) and self.payment_request_payload:
+            payload = {}
+            try:
+                payload = json.loads(self.payment_request_payload)
+            except (TypeError, ValueError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            extracted_phone, extracted_document = extract_payer_identity(payload)
+            phone = phone or extracted_phone
+            document = document or extracted_document
+
+        return phone, document
+
 
     def _get_bcv_rate_or_fetch(self):
         """
@@ -438,6 +481,24 @@ class PaymentTransaction(models.Model):
         string="Payload de Solicitud API",
         readonly=True,
         help="Cuerpo completo (JSON/Dict) enviado por el tercero para originar la transacción."
+    )
+
+    # Identidad normalizada del pagador que el tercero envía en el create.
+    # Se usa para casar los avisos bancarios que solo traen el teléfono/cédula
+    # del pagador (Pago Móvil) sin depender del teléfono del comercio.
+    bestpay_payer_phone = fields.Char(
+        string="Teléfono Pagador (Normalizado)",
+        index=True,
+        copy=False,
+        readonly=True,
+        help="Teléfono del pagador normalizado a 10 dígitos, extraído del payload del tercero.",
+    )
+    bestpay_payer_document = fields.Char(
+        string="Documento Pagador (Normalizado)",
+        index=True,
+        copy=False,
+        readonly=True,
+        help="Cédula/documento del pagador normalizado, extraído del payload del tercero.",
     )
 
     payment_request_response = fields.Text(

@@ -24,14 +24,79 @@
             <field name="name">bestpay.bank.notification.list</field>
             <field name="model">bestpay.bank.notification</field>
             <field name="arch" type="xml">
-                <list string="Notificaciones Bancarias">
+                <list string="Notificaciones Bancarias" decoration-danger="status in ('ambiguous', 'orphan', 'error')" decoration-success="status in ('matched', 'matched_late')">
                     <field name="external_ref" string="Referencia"/>
                     <field name="received_at" string="Creado el"/>
                     <field name="provider_code" string="Método de pago"/>
+                    <field name="payer_phone" string="Teléfono Pagador"/>
+                    <field name="payer_document" string="Documento Pagador" optional="hide"/>
                     <field name="partner_id" string="Cliente"/>
                     <field name="amount" string="Importe"/>
-                    <field name="status" string="Estado"/>
+                    <field name="match_method" string="Método"/>
+                    <field name="status" string="Estado" widget="badge"/>
                 </list>
+            </field>
+        </record>
+
+        <record id="view_bestpay_bank_notification_form" model="ir.ui.view">
+            <field name="name">bestpay.bank.notification.form</field>
+            <field name="model">bestpay.bank.notification</field>
+            <field name="arch" type="xml">
+                <form string="Notificación Bancaria">
+                    <header>
+                        <field name="status" widget="statusbar" statusbar_visible="received,matched,ambiguous,orphan"/>
+                    </header>
+                    <sheet>
+                        <group>
+                            <group string="Aviso del banco">
+                                <field name="provider_code"/>
+                                <field name="external_ref"/>
+                                <field name="received_at"/>
+                                <field name="amount"/>
+                                <field name="merchant_phone"/>
+                                <field name="merchant_rif"/>
+                            </group>
+                            <group string="Pagador">
+                                <field name="payer_phone"/>
+                                <field name="payer_document"/>
+                                <field name="payer_phone_key" invisible="not payer_phone_key"/>
+                                <field name="payer_document_key" invisible="not payer_document_key"/>
+                            </group>
+                        </group>
+                        <group string="Resultado del casado">
+                            <field name="partner_id" readonly="1"/>
+                            <field name="transaction_id" readonly="1"/>
+                            <field name="match_method" readonly="1"/>
+                            <field name="candidate_count" readonly="1"/>
+                            <field name="matched_at" readonly="1"/>
+                            <field name="match_note" readonly="1" invisible="not match_note"/>
+                            <field name="error_message" readonly="1" invisible="not error_message"/>
+                        </group>
+                        <notebook>
+                            <page string="Payload Crudo">
+                                <field name="raw_payload" readonly="1" widget="ace" options="{'mode': 'javascript'}"/>
+                            </page>
+                        </notebook>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <record id="view_bestpay_bank_notification_search" model="ir.ui.view">
+            <field name="name">bestpay.bank.notification.search</field>
+            <field name="model">bestpay.bank.notification</field>
+            <field name="arch" type="xml">
+                <search>
+                    <field name="external_ref"/>
+                    <field name="payer_phone"/>
+                    <field name="payer_document"/>
+                    <field name="partner_id"/>
+                    <filter name="pending" string="Sin casar" domain="[('status', 'in', ('received', 'ambiguous', 'orphan'))]"/>
+                    <filter name="ambiguous" string="Ambiguas" domain="[('status', '=', 'ambiguous')]"/>
+                    <filter name="orphan" string="Huérfanas" domain="[('status', '=', 'orphan')]"/>
+                    <filter name="group_status" string="Agrupar por Estado" context="{'group_by': 'status'}"/>
+                    <filter name="group_partner" string="Agrupar por Cliente" context="{'group_by': 'partner_id'}"/>
+                </search>
             </field>
         </record>
 
@@ -39,6 +104,7 @@
             <field name="name">Notificaciones Bancarias</field>
             <field name="res_model">bestpay.bank.notification</field>
             <field name="view_mode">list,form,kanban</field>
+            <field name="search_view_id" ref="view_bestpay_bank_notification_search"/>
             <field name="help" type="html">
                 <p class="o_view_nocontent_smiling_face">
                     No hay notificaciones bancarias registradas aún.
